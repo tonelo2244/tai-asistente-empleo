@@ -42,6 +42,18 @@ export interface ResultadoAnalisis {
 
 // --- Autenticación ---
 
+// Los errores de DRF llegan como { campo: ["mensaje"] } o { non_field_errors: ["mensaje"] }.
+// Devolvemos el primer mensaje disponible, sin asumir en qué campo vendrá el error.
+function extraerPrimerError(errorData: unknown, fallback: string): string {
+  if (!errorData || typeof errorData !== 'object') return fallback
+
+  for (const valor of Object.values(errorData as Record<string, unknown>)) {
+    if (Array.isArray(valor) && typeof valor[0] === 'string') return valor[0]
+  }
+
+  return fallback
+}
+
 export async function loginUsuario(username: string, password: string): Promise<RespuestaLogin> {
   const respuesta = await fetch(`${BASE_URL}/usuarios/login/`, {
     method:  'POST',
@@ -50,7 +62,7 @@ export async function loginUsuario(username: string, password: string): Promise<
   })
   if (!respuesta.ok) {
     const error = await respuesta.json()
-    throw new Error(error.non_field_errors?.[0] || 'Error al iniciar sesión')
+    throw new Error(extraerPrimerError(error, 'Error al iniciar sesión'))
   }
   return respuesta.json()
 }
@@ -68,7 +80,7 @@ export async function registrarUsuario(
   })
   if (!respuesta.ok) {
     const error = await respuesta.json()
-    throw new Error(error.username?.[0] || 'Error al registrarse')
+    throw new Error(extraerPrimerError(error, 'Error al registrarse'))
   }
   return respuesta.json()
 }
