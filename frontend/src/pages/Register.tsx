@@ -2,6 +2,8 @@ import { useState } from 'react'
 import { useNavigate, Link } from 'react-router-dom'
 import { useAuth } from '../context/AuthContext'
 import { registrarUsuario, obtenerUsuarioAutenticado } from '../services/api'
+import Spinner from '../components/Spinner'
+import Alert from '../components/Alert'
 
 function Register() {
   const [username, setUsername] = useState('')
@@ -95,13 +97,14 @@ function Register() {
             </select>
           </div>
 
-          {error && <div className="form-error">{error}</div>}
+          {error && <Alert type="error">{error}</Alert>}
 
           <button
             type="submit"
             disabled={cargando}
             className="auth-button"
           >
+            {cargando && <Spinner size={14} variant="light" />}
             {cargando ? 'Creando cuenta...' : 'Crear cuenta'}
           </button>
         </form>

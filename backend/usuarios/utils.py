@@ -82,6 +82,7 @@ def analizar_perfil(perfil):
     if perfil.experiencia.strip():
         fortalezas.append("Has añadido experiencia profesional.")
         if len(perfil.experiencia.strip()) < 100:
+            aspectos_mejora.append("La experiencia profesional está descrita de forma muy breve.")
             recomendaciones.append("Intenta detallar más tu experiencia: empresa, rol y logros concretos.")
     else:
         aspectos_mejora.append("No has descrito tu experiencia profesional.")
@@ -94,6 +95,7 @@ def analizar_perfil(perfil):
         if keywords:
             fortalezas.append(f"Se detectaron habilidades técnicas: {', '.join(keywords)}.")
         else:
+            aspectos_mejora.append("Las habilidades no incluyen tecnologías o herramientas reconocibles.")
             recomendaciones.append("Añade habilidades técnicas concretas como lenguajes o herramientas.")
     else:
         aspectos_mejora.append("No has añadido habilidades.")

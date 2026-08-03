@@ -1,7 +1,10 @@
 import { useEffect, useState } from 'react'
 import { useNavigate, Link } from 'react-router-dom'
+import { ArrowLeft, Save } from 'lucide-react'
 import { useAuth } from '../context/AuthContext'
 import { obtenerPerfilProfesional, actualizarPerfilProfesional } from '../services/api'
+import Spinner from '../components/Spinner'
+import Alert from '../components/Alert'
 
 function PerfilProfesional() {
   const { token } = useAuth()
@@ -48,7 +51,7 @@ function PerfilProfesional() {
 
     try {
       await actualizarPerfilProfesional(token, form)
-      setMensaje('✓ Perfil guardado correctamente')
+      setMensaje('Perfil guardado correctamente')
       setTimeout(() => setMensaje(''), 3000)
     } catch (err: any) {
       setError(err.message)
@@ -61,7 +64,10 @@ function PerfilProfesional() {
     return (
       <div className="profile-page">
         <div className="profile-container">
-          <p className="text-center text-muted">Cargando tu perfil...</p>
+          <div className="loading-state">
+            <Spinner size={28} variant="dark" />
+            <p>Cargando tu perfil...</p>
+          </div>
         </div>
       </div>
     )
@@ -71,7 +77,7 @@ function PerfilProfesional() {
     <div className="profile-page">
       <div className="profile-container">
         <Link to="/dashboard" className="back-link">
-          ← Volver al dashboard
+          <ArrowLeft size={16} /> Volver al dashboard
         </Link>
 
         <div className="profile-header">
@@ -157,8 +163,8 @@ function PerfilProfesional() {
             />
           </div>
 
-          {error && <div className="form-error">{error}</div>}
-          {mensaje && <div className="form-success">{mensaje}</div>}
+          {error && <Alert type="error">{error}</Alert>}
+          {mensaje && <Alert type="success">{mensaje}</Alert>}
 
           <div className="profile-actions">
             <button
@@ -166,7 +172,8 @@ function PerfilProfesional() {
               disabled={guardando}
               className="btn-primary"
             >
-              {guardando ? 'Guardando...' : '💾 Guardar cambios'}
+              {guardando ? <Spinner size={14} variant="light" /> : <Save size={16} />}
+              {guardando ? 'Guardando...' : 'Guardar cambios'}
             </button>
             <Link to="/dashboard" className="btn-secondary" style={{ textAlign: 'center' }}>
               Cancelar

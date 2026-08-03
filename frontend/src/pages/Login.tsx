@@ -2,6 +2,8 @@ import { useState } from 'react'
 import { useNavigate, Link } from 'react-router-dom'
 import { useAuth } from '../context/AuthContext'
 import { loginUsuario } from '../services/api'
+import Spinner from '../components/Spinner'
+import Alert from '../components/Alert'
 
 function Login() {
   const [username, setUsername] = useState('')
@@ -65,13 +67,14 @@ function Login() {
             />
           </div>
 
-          {error && <div className="form-error">{error}</div>}
+          {error && <Alert type="error">{error}</Alert>}
 
           <button
             type="submit"
             disabled={cargando}
             className="auth-button"
           >
+            {cargando && <Spinner size={14} variant="light" />}
             {cargando ? 'Conectando...' : 'Iniciar sesión'}
           </button>
         </form>
