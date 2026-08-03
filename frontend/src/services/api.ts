@@ -120,7 +120,10 @@ export async function actualizarPerfilProfesional(
     },
     body: JSON.stringify(datos)
   })
-  if (!respuesta.ok) throw new Error('Error al guardar el perfil profesional')
+  if (!respuesta.ok) {
+    const error = await respuesta.json()
+    throw new Error(extraerPrimerError(error, 'Error al guardar el perfil profesional'))
+  }
   return respuesta.json()
 }
 

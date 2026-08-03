@@ -2,7 +2,7 @@ from django.contrib.auth.models import User
 from django.test import TestCase
 from rest_framework.authtoken.models import Token
 
-from .models import Perfil
+from .models import Perfil, PerfilProfesional
 
 
 class RegistroTests(TestCase):
@@ -83,3 +83,119 @@ class AccesoProtegidoTests(TestCase):
         datos = respuesta.json()
         self.assertEqual(datos['username'], 'juan')
         self.assertEqual(datos['rol'], 'usuario')
+
+
+class PerfilProfesionalTests(TestCase):
+    def setUp(self):
+        self.user_a = User.objects.create_user(username='juan', password='clave12345')
+        Perfil.objects.create(usuario=self.user_a, rol='usuario')
+        self.token_a = Token.objects.create(user=self.user_a)
+
+        self.user_b = User.objects.create_user(username='maria', password='clave12345')
+        Perfil.objects.create(usuario=self.user_b, rol='usuario')
+        self.token_b = Token.objects.create(user=self.user_b)
+
+    def auth_headers(self, token):
+        return {'HTTP_AUTHORIZATION': f'Token {token.key}'}
+
+    def test_acceso_sin_token_es_rechazado(self):
+        respuesta = self.client.get('/api/usuarios/perfil-profesional/')
+        self.assertEqual(respuesta.status_code, 401)
+
+    def test_get_crea_o_recupera_el_perfil_automaticamente(self):
+        self.assertFalse(PerfilProfesional.objects.filter(usuario=self.user_a).exists())
+
+        respuesta = self.client.get(
+            '/api/usuarios/perfil-profesional/', **self.auth_headers(self.token_a)
+        )
+
+        self.assertEqual(respuesta.status_code, 200)
+        self.assertEqual(respuesta.json()['username'], 'juan')
+        self.assertTrue(PerfilProfesional.objects.filter(usuario=self.user_a).exists())
+
+    def test_lectura_del_perfil_propio(self):
+        PerfilProfesional.objects.create(
+            usuario=self.user_a, nombre_completo='Juan Pérez', ciudad='Madrid'
+        )
+
+        respuesta = self.client.get(
+            '/api/usuarios/perfil-profesional/', **self.auth_headers(self.token_a)
+        )
+
+        datos = respuesta.json()
+        self.assertEqual(datos['nombre_completo'], 'Juan Pérez')
+        self.assertEqual(datos['ciudad'], 'Madrid')
+
+    def test_actualizacion_correcta(self):
+        respuesta = self.client.put(
+            '/api/usuarios/perfil-profesional/',
+            data={
+                'nombre_completo': '  Juan Pérez  ',
+                'telefono': '+34 912 345 678',
+                'ciudad': 'Madrid',
+                'estudios': 'Grado en Ingeniería Informática',
+                'experiencia': 'Desarrollador backend, 3 años',
+                'habilidades': 'Python, Django, React',
+            },
+            content_type='application/json',
+            **self.auth_headers(self.token_a),
+        )
+
+        self.assertEqual(respuesta.status_code, 200)
+        datos = respuesta.json()
+        # La sanitización básica debe recortar espacios sobrantes
+        self.assertEqual(datos['nombre_completo'], 'Juan Pérez')
+
+        perfil = PerfilProfesional.objects.get(usuario=self.user_a)
+        self.assertEqual(perfil.ciudad, 'Madrid')
+        self.assertEqual(perfil.habilidades, 'Python, Django, React')
+
+    def test_usuario_no_accede_al_perfil_de_otro(self):
+        PerfilProfesional.objects.create(
+            usuario=self.user_a, nombre_completo='Juan Pérez'
+        )
+        PerfilProfesional.objects.create(
+            usuario=self.user_b, nombre_completo='María López'
+        )
+
+        respuesta_a = self.client.get(
+            '/api/usuarios/perfil-profesional/', **self.auth_headers(self.token_a)
+        )
+        respuesta_b = self.client.get(
+            '/api/usuarios/perfil-profesional/', **self.auth_headers(self.token_b)
+        )
+
+        self.assertEqual(respuesta_a.json()['nombre_completo'], 'Juan Pérez')
+        self.assertEqual(respuesta_b.json()['nombre_completo'], 'María López')
+
+        # Actualizar como usuario B no debe afectar al perfil de A
+        self.client.put(
+            '/api/usuarios/perfil-profesional/',
+            data={'nombre_completo': 'María Modificada'},
+            content_type='application/json',
+            **self.auth_headers(self.token_b),
+        )
+        perfil_a = PerfilProfesional.objects.get(usuario=self.user_a)
+        self.assertEqual(perfil_a.nombre_completo, 'Juan Pérez')
+
+    def test_telefono_con_caracteres_no_permitidos_es_rechazado(self):
+        respuesta = self.client.put(
+            '/api/usuarios/perfil-profesional/',
+            data={'telefono': 'llámame ya!!'},
+            content_type='application/json',
+            **self.auth_headers(self.token_a),
+        )
+
+        self.assertEqual(respuesta.status_code, 400)
+        self.assertIn('telefono', respuesta.json())
+
+    def test_estudios_supera_longitud_maxima_es_rechazado(self):
+        respuesta = self.client.put(
+            '/api/usuarios/perfil-profesional/',
+            data={'estudios': 'x' * 2001},
+            content_type='application/json',
+            **self.auth_headers(self.token_a),
+        )
+
+        self.assertEqual(respuesta.status_code, 400)
+        self.assertIn('estudios', respuesta.json())

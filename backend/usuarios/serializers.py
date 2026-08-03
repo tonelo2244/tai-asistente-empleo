@@ -1,6 +1,7 @@
 from rest_framework import serializers
 from django.contrib.auth.models import User
 from django.contrib.auth import authenticate
+from django.core.validators import RegexValidator
 
 from .models import (
     Perfil,
@@ -82,10 +83,32 @@ class PerfilSerializer(serializers.ModelSerializer):
 # Perfil profesional
 # -----------------------------
 
+TELEFONO_VALIDATOR = RegexValidator(
+    regex=r'^[0-9+\-\s()]*$',
+    message="El teléfono solo puede contener números, espacios y los símbolos + - ( )."
+)
+
+
 class PerfilProfesionalSerializer(serializers.ModelSerializer):
     username = serializers.CharField(
         source="usuario.username",
         read_only=True
+    )
+
+    # Los tres campos de texto libre son TextField sin límite en el modelo;
+    # se acota aquí para evitar entradas desproporcionadas sin necesitar migración.
+    estudios = serializers.CharField(
+        required=False, allow_blank=True, max_length=2000
+    )
+    experiencia = serializers.CharField(
+        required=False, allow_blank=True, max_length=4000
+    )
+    habilidades = serializers.CharField(
+        required=False, allow_blank=True, max_length=2000
+    )
+    telefono = serializers.CharField(
+        required=False, allow_blank=True, max_length=20,
+        validators=[TELEFONO_VALIDATOR]
     )
 
     class Meta:
@@ -99,6 +122,13 @@ class PerfilProfesionalSerializer(serializers.ModelSerializer):
             "experiencia",
             "habilidades",
         ]
+
+    def validate(self, data):
+        # Sanitización básica: quitar espacios sobrantes en los campos de texto recibidos.
+        for campo in ("nombre_completo", "telefono", "ciudad", "estudios", "experiencia", "habilidades"):
+            if campo in data and isinstance(data[campo], str):
+                data[campo] = data[campo].strip()
+        return data
 
 
 # -----------------------------
