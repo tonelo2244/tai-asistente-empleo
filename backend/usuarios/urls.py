@@ -20,4 +20,9 @@ urlpatterns = [
     path('analisis/generar/',    views.generar_analisis),
     path('analisis/ultimo/',     views.ultimo_analisis),
     path('analisis/historial/',  views.historial_analisis),
+
+    # Fase 6 — análisis de CV
+    path('cv/subir/',            views.subir_cv),
+    path('cv/ultimo/',           views.ultimo_cv),
+    path('cv/historial/',        views.historial_cv),
 ]

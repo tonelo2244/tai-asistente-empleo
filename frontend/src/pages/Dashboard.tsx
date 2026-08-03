@@ -10,6 +10,7 @@ import {
   XCircle,
   LogOut,
   Sparkles,
+  FileUp,
 } from 'lucide-react'
 import { useAuth } from '../context/AuthContext'
 import { ping } from '../services/api'
@@ -139,6 +140,21 @@ function Dashboard() {
             </div>
             <span className="card-link">
               Ver historial <ArrowRight size={14} />
+            </span>
+          </Link>
+
+          <Link to="/cv" className="card">
+            <div className="card-icon">
+              <FileUp size={22} />
+            </div>
+            <div className="card-content">
+              <h3>Analizar mi CV</h3>
+              <p>
+                Sube tu currículum en PDF y recibe puntuación, fortalezas y recomendaciones.
+              </p>
+            </div>
+            <span className="card-link">
+              Subir CV <ArrowRight size={14} />
             </span>
           </Link>
         </section>

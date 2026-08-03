@@ -56,3 +56,34 @@ class ResultadoAnalisis(models.Model):
             f"Análisis de {self.usuario.username} — "
             f"{self.fecha_creacion.strftime('%d/%m/%Y %H:%M')}"
         )
+
+
+def ruta_cv(instance, filename):
+    return f'cv/{instance.usuario_id}/{filename}'
+
+
+class Curriculum(models.Model):
+    # Un usuario puede subir y analizar varios CV a lo largo del tiempo
+    usuario = models.ForeignKey(User, on_delete=models.CASCADE)
+
+    archivo = models.FileField(upload_to=ruta_cv)
+    nombre_archivo = models.CharField(max_length=255, blank=True)
+    texto_extraido = models.TextField(blank=True)
+
+    # Resultado del análisis — misma filosofía que ResultadoAnalisis
+    resumen = models.TextField(blank=True)
+    puntuacion = models.IntegerField(default=0)
+    fortalezas = models.JSONField(default=list)
+    debilidades = models.JSONField(default=list)
+    recomendaciones = models.JSONField(default=list)
+
+    fecha_subida = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ['-fecha_subida']
+
+    def __str__(self):
+        return (
+            f"CV de {self.usuario.username} — "
+            f"{self.fecha_subida.strftime('%d/%m/%Y %H:%M')}"
+        )

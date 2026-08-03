@@ -40,6 +40,18 @@ export interface ResultadoAnalisis {
   fecha_creacion:         string
 }
 
+export interface Curriculum {
+  id:              number
+  nombre_archivo:  string
+  texto_extraido:  string
+  resumen:         string
+  puntuacion:      number
+  fortalezas:      string[]
+  debilidades:     string[]
+  recomendaciones: string[]
+  fecha_subida:    string
+}
+
 // --- Autenticación ---
 
 // Los errores de DRF llegan como { campo: ["mensaje"] } o { non_field_errors: ["mensaje"] }.
@@ -154,5 +166,43 @@ export async function obtenerHistorialAnalisis(token: string): Promise<Resultado
     headers: { 'Authorization': `Token ${token}` }
   })
   if (!respuesta.ok) throw new Error('Error al obtener el historial')
+  return respuesta.json()
+}
+
+// --- Análisis de CV (Fase 6) ---
+
+// POST — sube un PDF, extrae su texto y genera el análisis
+export async function subirCV(token: string, archivo: File): Promise<Curriculum> {
+  const formData = new FormData()
+  formData.append('archivo', archivo)
+
+  const respuesta = await fetch(`${BASE_URL}/usuarios/cv/subir/`, {
+    method:  'POST',
+    // Sin Content-Type manual: el navegador añade el boundary multipart correcto.
+    headers: { 'Authorization': `Token ${token}` },
+    body:    formData
+  })
+  if (!respuesta.ok) {
+    const error = await respuesta.json()
+    throw new Error(extraerPrimerError(error, 'Error al subir el CV'))
+  }
+  return respuesta.json()
+}
+
+// GET — devuelve el CV analizado más reciente
+export async function obtenerUltimoCV(token: string): Promise<Curriculum> {
+  const respuesta = await fetch(`${BASE_URL}/usuarios/cv/ultimo/`, {
+    headers: { 'Authorization': `Token ${token}` }
+  })
+  if (!respuesta.ok) throw new Error('Sin CV previo')
+  return respuesta.json()
+}
+
+// GET — devuelve todos los CV analizados del usuario
+export async function obtenerHistorialCV(token: string): Promise<Curriculum[]> {
+  const respuesta = await fetch(`${BASE_URL}/usuarios/cv/historial/`, {
+    headers: { 'Authorization': `Token ${token}` }
+  })
+  if (!respuesta.ok) throw new Error('Error al obtener el historial de CV')
   return respuesta.json()
 }

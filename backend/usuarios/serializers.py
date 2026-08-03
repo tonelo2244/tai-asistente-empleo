@@ -2,12 +2,14 @@ from rest_framework import serializers
 from django.contrib.auth.models import User
 from django.contrib.auth import authenticate
 from django.core.validators import RegexValidator
+from pypdf import PdfReader
 
 from .models import (
     Perfil,
     ROLES,
     PerfilProfesional,
     ResultadoAnalisis,
+    Curriculum,
 )
 
 
@@ -152,4 +154,60 @@ class ResultadoAnalisisSerializer(serializers.ModelSerializer):
             "puntuacion_completitud",
             "fecha_creacion",
         ]
-        
+
+
+# -----------------------------
+# Curriculum (CV) — Fase 6
+# -----------------------------
+
+MAX_CV_SIZE_MB = 5
+MAX_CV_SIZE_BYTES = MAX_CV_SIZE_MB * 1024 * 1024
+
+
+class CurriculumUploadSerializer(serializers.Serializer):
+    archivo = serializers.FileField()
+
+    def validate_archivo(self, value):
+        nombre = (value.name or '').lower()
+
+        if not nombre.endswith('.pdf'):
+            raise serializers.ValidationError("Solo se admiten archivos PDF.")
+
+        content_type = getattr(value, 'content_type', '') or ''
+        if content_type and content_type not in ('application/pdf', 'application/x-pdf'):
+            raise serializers.ValidationError("Solo se admiten archivos PDF.")
+
+        if value.size > MAX_CV_SIZE_BYTES:
+            raise serializers.ValidationError(
+                f"El archivo supera el tamaño máximo permitido ({MAX_CV_SIZE_MB} MB)."
+            )
+
+        try:
+            PdfReader(value)
+        except Exception:
+            raise serializers.ValidationError("El archivo no es un PDF válido o está dañado.")
+        finally:
+            value.seek(0)
+
+        return value
+
+
+class CurriculumSerializer(serializers.ModelSerializer):
+    fecha_subida = serializers.DateTimeField(
+        format="%d/%m/%Y %H:%M",
+        read_only=True
+    )
+
+    class Meta:
+        model = Curriculum
+        fields = [
+            "id",
+            "nombre_archivo",
+            "texto_extraido",
+            "resumen",
+            "puntuacion",
+            "fortalezas",
+            "debilidades",
+            "recomendaciones",
+            "fecha_subida",
+        ]

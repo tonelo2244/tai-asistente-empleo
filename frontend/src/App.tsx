@@ -10,6 +10,7 @@ import Register from './pages/Register'
 import Dashboard from './pages/Dashboard'
 import PerfilProfesional from './pages/PerfilProfesional'
 import AnalisisPerfilPage from './pages/AnalisisPerfil'
+import AnalisisCVPage from './pages/AnalisisCV'
 
 function RutaProtegida({ children }: { children: React.ReactNode }) {
   const { token } = useAuth()
@@ -50,6 +51,15 @@ function AppRoutes() {
         element={
           <RutaProtegida>
             <AnalisisPerfilPage />
+          </RutaProtegida>
+        }
+      />
+
+      <Route
+        path="/cv"
+        element={
+          <RutaProtegida>
+            <AnalisisCVPage />
           </RutaProtegida>
         }
       />

@@ -1,9 +1,52 @@
+import io
+import shutil
+import tempfile
+
 from django.contrib.auth.models import User
-from django.test import SimpleTestCase, TestCase
+from django.core.files.uploadedfile import SimpleUploadedFile
+from django.test import SimpleTestCase, TestCase, override_settings
+from pypdf import PdfWriter
+from pypdf.generic import DecodedStreamObject, DictionaryObject, NameObject
 from rest_framework.authtoken.models import Token
 
-from .models import Perfil, PerfilProfesional, ResultadoAnalisis
+from .models import Curriculum, Perfil, PerfilProfesional, ResultadoAnalisis
 from .utils import calcular_puntuacion
+
+
+def crear_pdf(lineas=None):
+    """Construye un PDF real en memoria (opcionalmente con texto seleccionable)."""
+    writer = PdfWriter()
+    page = writer.add_blank_page(width=400, height=600)
+
+    if lineas:
+        y = 550
+        comandos = []
+        for linea in lineas:
+            escapado = linea.replace('\\', r'\\').replace('(', r'\(').replace(')', r'\)')
+            comandos.append(f"BT /Helv 12 Tf 20 {y} Td ({escapado}) Tj ET")
+            y -= 20
+
+        stream_obj = DecodedStreamObject()
+        stream_obj.set_data("\n".join(comandos).encode('latin-1'))
+        content_ref = writer._add_object(stream_obj)
+
+        font_dict = DictionaryObject()
+        font_dict[NameObject("/Type")] = NameObject("/Font")
+        font_dict[NameObject("/Subtype")] = NameObject("/Type1")
+        font_dict[NameObject("/BaseFont")] = NameObject("/Helvetica")
+        font_ref = writer._add_object(font_dict)
+
+        resources = DictionaryObject()
+        font_res = DictionaryObject()
+        font_res[NameObject("/Helv")] = font_ref
+        resources[NameObject("/Font")] = font_res
+
+        page[NameObject("/Contents")] = content_ref
+        page[NameObject("/Resources")] = resources
+
+    buf = io.BytesIO()
+    writer.write(buf)
+    return buf.getvalue()
 
 
 class RegistroTests(TestCase):
@@ -345,3 +388,191 @@ class AnalisisTests(TestCase):
 
         ids = [item['id'] for item in historial]
         self.assertEqual(ids, sorted(ids, reverse=True))
+
+
+TEMP_MEDIA_ROOT = tempfile.mkdtemp()
+
+
+@override_settings(MEDIA_ROOT=TEMP_MEDIA_ROOT)
+class CurriculumTests(TestCase):
+    @classmethod
+    def tearDownClass(cls):
+        super().tearDownClass()
+        shutil.rmtree(TEMP_MEDIA_ROOT, ignore_errors=True)
+
+    def setUp(self):
+        self.user_a = User.objects.create_user(username='juan', password='clave12345')
+        Perfil.objects.create(usuario=self.user_a, rol='usuario')
+        self.token_a = Token.objects.create(user=self.user_a)
+
+        self.user_b = User.objects.create_user(username='maria', password='clave12345')
+        Perfil.objects.create(usuario=self.user_b, rol='usuario')
+        self.token_b = Token.objects.create(user=self.user_b)
+
+    def auth_headers(self, token):
+        return {'HTTP_AUTHORIZATION': f'Token {token.key}'}
+
+    def pdf_con_contenido(self, nombre='cv.pdf'):
+        contenido = crear_pdf([
+            "Juan Perez",
+            "contacto: juan@example.com telefono 600111222",
+            "Experiencia profesional",
+            "Desarrollador backend durante 3 anios con Python y Django",
+            "Formacion academica",
+            "Grado en Ingenieria Informatica",
+            "Habilidades",
+            "Python, Django, Docker, Git",
+        ])
+        return SimpleUploadedFile(nombre, contenido, content_type='application/pdf')
+
+    def test_acceso_sin_token_es_rechazado(self):
+        self.assertEqual(self.client.post('/api/usuarios/cv/subir/').status_code, 401)
+        self.assertEqual(self.client.get('/api/usuarios/cv/ultimo/').status_code, 401)
+        self.assertEqual(self.client.get('/api/usuarios/cv/historial/').status_code, 401)
+
+    def test_subida_correcta(self):
+        respuesta = self.client.post(
+            '/api/usuarios/cv/subir/',
+            {'archivo': self.pdf_con_contenido()},
+            **self.auth_headers(self.token_a),
+        )
+
+        self.assertEqual(respuesta.status_code, 201)
+        datos = respuesta.json()
+        self.assertEqual(datos['nombre_archivo'], 'cv.pdf')
+        self.assertTrue(Curriculum.objects.filter(usuario=self.user_a).exists())
+
+    def test_rechazo_archivo_no_pdf(self):
+        archivo = SimpleUploadedFile(
+            'cv.txt', b'esto no es un pdf', content_type='text/plain'
+        )
+
+        respuesta = self.client.post(
+            '/api/usuarios/cv/subir/',
+            {'archivo': archivo},
+            **self.auth_headers(self.token_a),
+        )
+
+        self.assertEqual(respuesta.status_code, 400)
+        self.assertIn('archivo', respuesta.json())
+        self.assertFalse(Curriculum.objects.filter(usuario=self.user_a).exists())
+
+    def test_rechazo_pdf_falso_con_extension_correcta(self):
+        # Extensión .pdf pero contenido no válido: debe rechazarse igualmente.
+        archivo = SimpleUploadedFile(
+            'falso.pdf', b'esto no es un pdf real', content_type='application/pdf'
+        )
+
+        respuesta = self.client.post(
+            '/api/usuarios/cv/subir/',
+            {'archivo': archivo},
+            **self.auth_headers(self.token_a),
+        )
+
+        self.assertEqual(respuesta.status_code, 400)
+
+    def test_archivo_obligatorio(self):
+        respuesta = self.client.post(
+            '/api/usuarios/cv/subir/', {}, **self.auth_headers(self.token_a)
+        )
+
+        self.assertEqual(respuesta.status_code, 400)
+        self.assertIn('archivo', respuesta.json())
+
+    def test_archivo_supera_tamano_maximo_es_rechazado(self):
+        contenido_grande = b'%PDF-1.4\n' + b'0' * (6 * 1024 * 1024)
+        archivo = SimpleUploadedFile(
+            'grande.pdf', contenido_grande, content_type='application/pdf'
+        )
+
+        respuesta = self.client.post(
+            '/api/usuarios/cv/subir/',
+            {'archivo': archivo},
+            **self.auth_headers(self.token_a),
+        )
+
+        self.assertEqual(respuesta.status_code, 400)
+
+    def test_extraccion_de_texto(self):
+        respuesta = self.client.post(
+            '/api/usuarios/cv/subir/',
+            {'archivo': self.pdf_con_contenido()},
+            **self.auth_headers(self.token_a),
+        )
+
+        curriculum = Curriculum.objects.get(usuario=self.user_a)
+        self.assertIn('Experiencia profesional', curriculum.texto_extraido)
+        self.assertIn('Python', curriculum.texto_extraido)
+        self.assertEqual(respuesta.json()['texto_extraido'], curriculum.texto_extraido)
+
+    def test_pdf_sin_texto_no_inventa_contenido(self):
+        archivo = SimpleUploadedFile(
+            'escaneado.pdf', crear_pdf(), content_type='application/pdf'
+        )
+
+        respuesta = self.client.post(
+            '/api/usuarios/cv/subir/',
+            {'archivo': archivo},
+            **self.auth_headers(self.token_a),
+        )
+
+        self.assertEqual(respuesta.status_code, 201)
+        datos = respuesta.json()
+        self.assertEqual(datos['texto_extraido'], '')
+        self.assertEqual(datos['puntuacion'], 0)
+        self.assertEqual(datos['fortalezas'], [])
+        self.assertGreater(len(datos['debilidades']), 0)
+
+    def test_creacion_del_analisis(self):
+        respuesta = self.client.post(
+            '/api/usuarios/cv/subir/',
+            {'archivo': self.pdf_con_contenido()},
+            **self.auth_headers(self.token_a),
+        )
+
+        datos = respuesta.json()
+        self.assertGreater(datos['puntuacion'], 0)
+        self.assertLessEqual(datos['puntuacion'], 100)
+        self.assertGreater(len(datos['fortalezas']), 0)
+        self.assertGreater(len(datos['recomendaciones']), 0)
+        self.assertTrue(datos['resumen'])
+
+    def test_historial(self):
+        for _ in range(3):
+            self.client.post(
+                '/api/usuarios/cv/subir/',
+                {'archivo': self.pdf_con_contenido()},
+                **self.auth_headers(self.token_a),
+            )
+
+        respuesta = self.client.get(
+            '/api/usuarios/cv/historial/', **self.auth_headers(self.token_a)
+        )
+
+        historial = respuesta.json()
+        self.assertEqual(len(historial), 3)
+        ids = [item['id'] for item in historial]
+        self.assertEqual(ids, sorted(ids, reverse=True))
+
+    def test_ultimo_cv_sin_subidas_devuelve_404(self):
+        respuesta = self.client.get(
+            '/api/usuarios/cv/ultimo/', **self.auth_headers(self.token_a)
+        )
+        self.assertEqual(respuesta.status_code, 404)
+
+    def test_aislamiento_entre_usuarios(self):
+        self.client.post(
+            '/api/usuarios/cv/subir/',
+            {'archivo': self.pdf_con_contenido()},
+            **self.auth_headers(self.token_a),
+        )
+
+        respuesta_b = self.client.get(
+            '/api/usuarios/cv/ultimo/', **self.auth_headers(self.token_b)
+        )
+        self.assertEqual(respuesta_b.status_code, 404)
+
+        historial_b = self.client.get(
+            '/api/usuarios/cv/historial/', **self.auth_headers(self.token_b)
+        )
+        self.assertEqual(historial_b.json(), [])
