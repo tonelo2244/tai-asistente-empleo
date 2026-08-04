@@ -11,6 +11,7 @@ import {
   LogOut,
   Sparkles,
   FileUp,
+  Briefcase,
 } from 'lucide-react'
 import { useAuth } from '../context/AuthContext'
 import { ping } from '../services/api'
@@ -155,6 +156,21 @@ function Dashboard() {
             </div>
             <span className="card-link">
               Subir CV <ArrowRight size={14} />
+            </span>
+          </Link>
+
+          <Link to="/ofertas" className="card">
+            <div className="card-icon">
+              <Briefcase size={22} />
+            </div>
+            <div className="card-content">
+              <h3>Comparar con ofertas</h3>
+              <p>
+                Introduce una oferta de empleo y descubre tu porcentaje de compatibilidad.
+              </p>
+            </div>
+            <span className="card-link">
+              Comparar oferta <ArrowRight size={14} />
             </span>
           </Link>
         </section>

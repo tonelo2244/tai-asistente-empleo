@@ -25,4 +25,8 @@ urlpatterns = [
     path('cv/subir/',            views.subir_cv),
     path('cv/ultimo/',           views.ultimo_cv),
     path('cv/historial/',        views.historial_cv),
+
+    # Fase 7 — comparación con ofertas de empleo
+    path('ofertas/crear/',       views.crear_oferta),
+    path('ofertas/historial/',   views.historial_ofertas),
 ]

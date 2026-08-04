@@ -87,3 +87,48 @@ class Curriculum(models.Model):
             f"CV de {self.usuario.username} — "
             f"{self.fecha_subida.strftime('%d/%m/%Y %H:%M')}"
         )
+
+
+# Clasificaciones posibles del porcentaje de compatibilidad (Fase 7)
+CLASIFICACIONES_MATCH = [
+    ('Excelente', 'Excelente'),
+    ('Muy buena', 'Muy buena'),
+    ('Buena', 'Buena'),
+    ('Mejorable', 'Mejorable'),
+    ('Insuficiente', 'Insuficiente'),
+]
+
+
+class Oferta(models.Model):
+    # Un usuario puede comparar varias ofertas de empleo a lo largo del tiempo
+    usuario = models.ForeignKey(User, on_delete=models.CASCADE)
+
+    # Datos de la oferta de empleo introducidos por el usuario
+    titulo_puesto = models.CharField(max_length=150)
+    empresa = models.CharField(max_length=150)
+    ubicacion = models.CharField(max_length=100, blank=True)
+    descripcion = models.TextField()
+    requisitos = models.TextField(blank=True)
+    habilidades = models.TextField(blank=True)
+    estudios_requeridos = models.CharField(max_length=255, blank=True)
+    experiencia_requerida = models.CharField(max_length=255, blank=True)
+
+    # Resultado de la comparación — misma filosofía que ResultadoAnalisis/Curriculum
+    habilidades_coincidentes = models.JSONField(default=list)
+    habilidades_faltantes = models.JSONField(default=list)
+    palabras_clave_coincidentes = models.JSONField(default=list)
+    experiencia_compatible = models.BooleanField(default=False)
+    estudios_compatibles = models.BooleanField(default=False)
+    porcentaje_match = models.IntegerField(default=0)
+    clasificacion = models.CharField(
+        max_length=20, choices=CLASIFICACIONES_MATCH, default='Insuficiente'
+    )
+    recomendaciones = models.JSONField(default=list)
+
+    fecha_creacion = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ['-fecha_creacion']
+
+    def __str__(self):
+        return f"{self.titulo_puesto} en {self.empresa} — {self.usuario.username}"

@@ -4,7 +4,7 @@ from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
 from rest_framework.authtoken.models import Token
 
-from .models import Perfil, PerfilProfesional, ResultadoAnalisis, Curriculum
+from .models import Perfil, PerfilProfesional, ResultadoAnalisis, Curriculum, Oferta
 
 from .serializers import (
     RegistroSerializer,
@@ -14,9 +14,12 @@ from .serializers import (
     ResultadoAnalisisSerializer,
     CurriculumUploadSerializer,
     CurriculumSerializer,
+    OfertaCreateSerializer,
+    OfertaSerializer,
 )
 
 from .utils import analizar_perfil, analizar_perfil_ia, extraer_texto_pdf, analizar_cv_ia
+from .comparador import DatosOferta, DatosCandidato, comparar_oferta_ia
 
 
 @api_view(['GET'])
@@ -187,4 +190,63 @@ def ultimo_cv(request):
 def historial_cv(request):
     curriculums = Curriculum.objects.filter(usuario=request.user)
     serializer = CurriculumSerializer(curriculums, many=True)
+    return Response(serializer.data)
+
+
+@api_view(['POST'])
+@permission_classes([IsAuthenticated])
+def crear_oferta(request):
+    serializer = OfertaCreateSerializer(data=request.data)
+
+    if not serializer.is_valid():
+        return Response(serializer.errors, status=400)
+
+    datos = serializer.validated_data
+    perfil, _ = PerfilProfesional.objects.get_or_create(usuario=request.user)
+    cv = Curriculum.objects.filter(usuario=request.user).first()
+
+    datos_oferta = DatosOferta(
+        habilidades=datos.get('habilidades', ''),
+        experiencia_requerida=datos.get('experiencia_requerida', ''),
+        estudios_requeridos=datos.get('estudios_requeridos', ''),
+        descripcion=datos['descripcion'],
+        requisitos=datos.get('requisitos', ''),
+    )
+    datos_candidato = DatosCandidato(
+        habilidades=perfil.habilidades,
+        experiencia=perfil.experiencia,
+        estudios=perfil.estudios,
+        texto_cv=cv.texto_extraido if cv else '',
+    )
+
+    resultado = comparar_oferta_ia(datos_oferta, datos_candidato)
+
+    oferta = Oferta.objects.create(
+        usuario=request.user,
+        titulo_puesto=datos['titulo_puesto'],
+        empresa=datos['empresa'],
+        ubicacion=datos.get('ubicacion', ''),
+        descripcion=datos['descripcion'],
+        requisitos=datos.get('requisitos', ''),
+        habilidades=datos.get('habilidades', ''),
+        estudios_requeridos=datos.get('estudios_requeridos', ''),
+        experiencia_requerida=datos.get('experiencia_requerida', ''),
+        habilidades_coincidentes=resultado["habilidades_coincidentes"],
+        habilidades_faltantes=resultado["habilidades_faltantes"],
+        palabras_clave_coincidentes=resultado["palabras_clave_coincidentes"],
+        experiencia_compatible=resultado["experiencia_compatible"],
+        estudios_compatibles=resultado["estudios_compatibles"],
+        porcentaje_match=resultado["porcentaje_match"],
+        clasificacion=resultado["clasificacion"],
+        recomendaciones=resultado["recomendaciones"],
+    )
+
+    return Response(OfertaSerializer(oferta).data, status=201)
+
+
+@api_view(['GET'])
+@permission_classes([IsAuthenticated])
+def historial_ofertas(request):
+    ofertas = Oferta.objects.filter(usuario=request.user)
+    serializer = OfertaSerializer(ofertas, many=True)
     return Response(serializer.data)

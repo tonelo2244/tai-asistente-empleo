@@ -9,7 +9,17 @@ from pypdf import PdfWriter
 from pypdf.generic import DecodedStreamObject, DictionaryObject, NameObject
 from rest_framework.authtoken.models import Token
 
-from .models import Curriculum, Perfil, PerfilProfesional, ResultadoAnalisis
+from .comparador import (
+    DatosCandidato,
+    DatosOferta,
+    calcular_porcentaje_match,
+    clasificar_match,
+    comparar_habilidades,
+    comparar_oferta,
+    evaluar_estudios,
+    evaluar_experiencia,
+)
+from .models import Curriculum, Oferta, Perfil, PerfilProfesional, ResultadoAnalisis
 from .utils import calcular_puntuacion
 
 
@@ -574,5 +584,273 @@ class CurriculumTests(TestCase):
 
         historial_b = self.client.get(
             '/api/usuarios/cv/historial/', **self.auth_headers(self.token_b)
+        )
+        self.assertEqual(historial_b.json(), [])
+
+
+class ComparadorOfertaTests(SimpleTestCase):
+    """Tests unitarios del motor de reglas, sin BD (usuarios/comparador.py)."""
+
+    def test_comparar_habilidades_coincidentes_y_faltantes(self):
+        coincidentes, faltantes = comparar_habilidades(
+            "Python, Django, Docker, React",
+            "Experiencia con Python y Django en proyectos web",
+        )
+        self.assertEqual(coincidentes, ['django', 'python'])
+        self.assertEqual(faltantes, ['docker', 'react'])
+
+    def test_evaluar_experiencia_compatible_por_anios(self):
+        self.assertTrue(
+            evaluar_experiencia("3 años de experiencia", "5 años como desarrollador backend")
+        )
+
+    def test_evaluar_experiencia_incompatible_por_anios(self):
+        self.assertFalse(
+            evaluar_experiencia("5 años de experiencia", "1 año como becario")
+        )
+
+    def test_evaluar_experiencia_sin_requisito_es_compatible(self):
+        self.assertTrue(evaluar_experiencia("", "cualquier experiencia"))
+
+    def test_evaluar_experiencia_sin_candidato_es_incompatible(self):
+        self.assertFalse(evaluar_experiencia("3 años", ""))
+
+    def test_evaluar_experiencia_sin_numero_usa_longitud_del_contenido(self):
+        experiencia_larga = "Desarrollador backend " * 10
+        self.assertTrue(evaluar_experiencia("Experiencia demostrable", experiencia_larga))
+        self.assertFalse(evaluar_experiencia("Experiencia demostrable", "poca cosa"))
+
+    def test_evaluar_estudios_compatible(self):
+        self.assertTrue(
+            evaluar_estudios("Grado en Informática", "Grado en Ingeniería Informática")
+        )
+
+    def test_evaluar_estudios_incompatible(self):
+        self.assertFalse(
+            evaluar_estudios("Doctorado en Física Cuántica", "Grado en Marketing")
+        )
+
+    def test_evaluar_estudios_sin_requisito_es_compatible(self):
+        self.assertTrue(evaluar_estudios("", "Grado en Informática"))
+
+    def test_calcular_porcentaje_match_maximo(self):
+        porcentaje = calcular_porcentaje_match(
+            habilidades_coincidentes=['python', 'django'],
+            habilidades_faltantes=[],
+            experiencia_compatible=True,
+            estudios_compatibles=True,
+            palabras_clave_coincidentes=['a', 'b', 'c', 'd', 'e'],
+        )
+        self.assertEqual(porcentaje, 100)
+
+    def test_calcular_porcentaje_match_minimo(self):
+        porcentaje = calcular_porcentaje_match(
+            habilidades_coincidentes=[],
+            habilidades_faltantes=['python', 'django'],
+            experiencia_compatible=False,
+            estudios_compatibles=False,
+            palabras_clave_coincidentes=[],
+        )
+        self.assertEqual(porcentaje, 0)
+
+    def test_calcular_porcentaje_match_siempre_entre_0_y_100(self):
+        combinaciones = [
+            ([], [], True, True, []),
+            (['python'], ['react', 'docker'], False, True, ['a']),
+            (['python', 'django', 'docker'], [], True, False, ['a', 'b', 'c', 'd', 'e', 'f']),
+        ]
+        for coincidentes, faltantes, exp, edu, palabras in combinaciones:
+            porcentaje = calcular_porcentaje_match(coincidentes, faltantes, exp, edu, palabras)
+            self.assertGreaterEqual(porcentaje, 0)
+            self.assertLessEqual(porcentaje, 100)
+
+    def test_clasificar_match_umbrales(self):
+        self.assertEqual(clasificar_match(90), "Excelente")
+        self.assertEqual(clasificar_match(89), "Muy buena")
+        self.assertEqual(clasificar_match(75), "Muy buena")
+        self.assertEqual(clasificar_match(74), "Buena")
+        self.assertEqual(clasificar_match(55), "Buena")
+        self.assertEqual(clasificar_match(54), "Mejorable")
+        self.assertEqual(clasificar_match(35), "Mejorable")
+        self.assertEqual(clasificar_match(34), "Insuficiente")
+        self.assertEqual(clasificar_match(0), "Insuficiente")
+
+    def test_comparar_oferta_completo(self):
+        oferta = DatosOferta(
+            habilidades="Python, Django, Docker",
+            experiencia_requerida="2 años",
+            estudios_requeridos="Grado en Informática",
+            descripcion="Buscamos desarrollador backend con Python y Django",
+            requisitos="Experiencia con bases de datos SQL",
+        )
+        candidato = DatosCandidato(
+            habilidades="Python, Django, Git",
+            experiencia="3 años como desarrollador backend con Python y Django",
+            estudios="Grado en Ingeniería Informática",
+            texto_cv="Desarrollador backend con experiencia en Python, Django y SQL",
+        )
+
+        resultado = comparar_oferta(oferta, candidato)
+
+        self.assertIn('python', resultado['habilidades_coincidentes'])
+        self.assertIn('django', resultado['habilidades_coincidentes'])
+        self.assertIn('docker', resultado['habilidades_faltantes'])
+        self.assertTrue(resultado['experiencia_compatible'])
+        self.assertTrue(resultado['estudios_compatibles'])
+        self.assertGreaterEqual(resultado['porcentaje_match'], 0)
+        self.assertLessEqual(resultado['porcentaje_match'], 100)
+        self.assertIn(resultado['clasificacion'], [
+            'Excelente', 'Muy buena', 'Buena', 'Mejorable', 'Insuficiente'
+        ])
+
+    def test_comparar_oferta_sin_cv_recomienda_subirlo(self):
+        oferta = DatosOferta(habilidades="Python")
+        candidato = DatosCandidato(habilidades="Python", texto_cv="")
+
+        resultado = comparar_oferta(oferta, candidato)
+
+        self.assertTrue(
+            any('Sube tu CV' in r for r in resultado['recomendaciones'])
+        )
+
+    def test_comparar_oferta_habilidad_faltante_genera_recomendacion(self):
+        oferta = DatosOferta(habilidades="Docker")
+        candidato = DatosCandidato(habilidades="Python")
+
+        resultado = comparar_oferta(oferta, candidato)
+
+        self.assertIn("Aprender docker.", resultado['recomendaciones'])
+
+
+class OfertaTests(TestCase):
+    def setUp(self):
+        self.user_a = User.objects.create_user(username='juan', password='clave12345')
+        Perfil.objects.create(usuario=self.user_a, rol='usuario')
+        self.token_a = Token.objects.create(user=self.user_a)
+
+        self.user_b = User.objects.create_user(username='maria', password='clave12345')
+        Perfil.objects.create(usuario=self.user_b, rol='usuario')
+        self.token_b = Token.objects.create(user=self.user_b)
+
+    def auth_headers(self, token):
+        return {'HTTP_AUTHORIZATION': f'Token {token.key}'}
+
+    def oferta_valida(self, **overrides):
+        datos = {
+            'titulo_puesto': 'Desarrollador Backend',
+            'empresa': 'TechCorp',
+            'ubicacion': 'Madrid',
+            'descripcion': 'Buscamos desarrollador backend con experiencia en Python y Django.',
+            'requisitos': 'Experiencia con bases de datos relacionales.',
+            'habilidades': 'Python, Django, Docker',
+            'estudios_requeridos': 'Grado en Informática',
+            'experiencia_requerida': '2 años',
+        }
+        datos.update(overrides)
+        return datos
+
+    def test_acceso_sin_token_es_rechazado(self):
+        self.assertEqual(
+            self.client.post('/api/usuarios/ofertas/crear/', {}, content_type='application/json').status_code,
+            401,
+        )
+        self.assertEqual(self.client.get('/api/usuarios/ofertas/historial/').status_code, 401)
+
+    def test_titulo_puesto_obligatorio(self):
+        respuesta = self.client.post(
+            '/api/usuarios/ofertas/crear/',
+            self.oferta_valida(titulo_puesto=''),
+            content_type='application/json',
+            **self.auth_headers(self.token_a),
+        )
+        self.assertEqual(respuesta.status_code, 400)
+        self.assertIn('titulo_puesto', respuesta.json())
+
+    def test_empresa_obligatoria(self):
+        respuesta = self.client.post(
+            '/api/usuarios/ofertas/crear/',
+            self.oferta_valida(empresa='   '),
+            content_type='application/json',
+            **self.auth_headers(self.token_a),
+        )
+        self.assertEqual(respuesta.status_code, 400)
+        self.assertIn('empresa', respuesta.json())
+
+    def test_descripcion_obligatoria(self):
+        respuesta = self.client.post(
+            '/api/usuarios/ofertas/crear/',
+            self.oferta_valida(descripcion=''),
+            content_type='application/json',
+            **self.auth_headers(self.token_a),
+        )
+        self.assertEqual(respuesta.status_code, 400)
+        self.assertIn('descripcion', respuesta.json())
+
+    def test_crear_oferta_valida_persiste_y_compara(self):
+        PerfilProfesional.objects.create(
+            usuario=self.user_a,
+            experiencia='3 años como desarrollador backend con Python y Django',
+            estudios='Grado en Ingeniería Informática',
+            habilidades='Python, Django, Git',
+        )
+
+        respuesta = self.client.post(
+            '/api/usuarios/ofertas/crear/',
+            self.oferta_valida(),
+            content_type='application/json',
+            **self.auth_headers(self.token_a),
+        )
+
+        self.assertEqual(respuesta.status_code, 201)
+        datos = respuesta.json()
+        self.assertIn('python', datos['habilidades_coincidentes'])
+        self.assertIn('docker', datos['habilidades_faltantes'])
+        self.assertTrue(datos['experiencia_compatible'])
+        self.assertTrue(datos['estudios_compatibles'])
+        self.assertGreaterEqual(datos['porcentaje_match'], 0)
+        self.assertLessEqual(datos['porcentaje_match'], 100)
+        self.assertTrue(datos['clasificacion'])
+        self.assertTrue(Oferta.objects.filter(usuario=self.user_a).exists())
+
+    def test_comparacion_sin_perfil_ni_cv_no_falla(self):
+        respuesta = self.client.post(
+            '/api/usuarios/ofertas/crear/',
+            self.oferta_valida(),
+            content_type='application/json',
+            **self.auth_headers(self.token_a),
+        )
+
+        self.assertEqual(respuesta.status_code, 201)
+        datos = respuesta.json()
+        self.assertEqual(datos['habilidades_coincidentes'], [])
+        self.assertGreater(len(datos['recomendaciones']), 0)
+
+    def test_historial_ordenado_por_fecha_descendente(self):
+        for i in range(3):
+            self.client.post(
+                '/api/usuarios/ofertas/crear/',
+                self.oferta_valida(titulo_puesto=f'Puesto {i}'),
+                content_type='application/json',
+                **self.auth_headers(self.token_a),
+            )
+
+        historial = self.client.get(
+            '/api/usuarios/ofertas/historial/', **self.auth_headers(self.token_a)
+        ).json()
+
+        ids = [item['id'] for item in historial]
+        self.assertEqual(len(ids), 3)
+        self.assertEqual(ids, sorted(ids, reverse=True))
+
+    def test_aislamiento_entre_usuarios(self):
+        self.client.post(
+            '/api/usuarios/ofertas/crear/',
+            self.oferta_valida(),
+            content_type='application/json',
+            **self.auth_headers(self.token_a),
+        )
+
+        historial_b = self.client.get(
+            '/api/usuarios/ofertas/historial/', **self.auth_headers(self.token_b)
         )
         self.assertEqual(historial_b.json(), [])

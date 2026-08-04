@@ -10,6 +10,7 @@ from .models import (
     PerfilProfesional,
     ResultadoAnalisis,
     Curriculum,
+    Oferta,
 )
 
 
@@ -210,4 +211,73 @@ class CurriculumSerializer(serializers.ModelSerializer):
             "debilidades",
             "recomendaciones",
             "fecha_subida",
+        ]
+
+
+# -----------------------------
+# Ofertas de empleo — Fase 7
+# -----------------------------
+
+CAMPOS_OFERTA_OBLIGATORIOS = {
+    "titulo_puesto": "El título del puesto",
+    "empresa": "La empresa",
+    "descripcion": "La descripción de la oferta",
+}
+
+
+class OfertaCreateSerializer(serializers.Serializer):
+    titulo_puesto = serializers.CharField(max_length=150)
+    empresa = serializers.CharField(max_length=150)
+    ubicacion = serializers.CharField(max_length=100, required=False, allow_blank=True)
+    descripcion = serializers.CharField(max_length=5000)
+    requisitos = serializers.CharField(max_length=3000, required=False, allow_blank=True)
+    habilidades = serializers.CharField(max_length=1000, required=False, allow_blank=True)
+    estudios_requeridos = serializers.CharField(max_length=255, required=False, allow_blank=True)
+    experiencia_requerida = serializers.CharField(max_length=255, required=False, allow_blank=True)
+
+    def validate(self, data):
+        # Sanitización básica: quitar espacios sobrantes en los campos de texto recibidos.
+        for campo, valor in data.items():
+            if isinstance(valor, str):
+                data[campo] = valor.strip()
+
+        # Los campos obligatorios no pueden quedar vacíos tras el recorte de espacios.
+        errores = {}
+        for campo, etiqueta in CAMPOS_OFERTA_OBLIGATORIOS.items():
+            if not data.get(campo):
+                errores[campo] = f"{etiqueta} es obligatorio/a."
+
+        if errores:
+            raise serializers.ValidationError(errores)
+
+        return data
+
+
+class OfertaSerializer(serializers.ModelSerializer):
+    fecha_creacion = serializers.DateTimeField(
+        format="%d/%m/%Y %H:%M",
+        read_only=True
+    )
+
+    class Meta:
+        model = Oferta
+        fields = [
+            "id",
+            "titulo_puesto",
+            "empresa",
+            "ubicacion",
+            "descripcion",
+            "requisitos",
+            "habilidades",
+            "estudios_requeridos",
+            "experiencia_requerida",
+            "habilidades_coincidentes",
+            "habilidades_faltantes",
+            "palabras_clave_coincidentes",
+            "experiencia_compatible",
+            "estudios_compatibles",
+            "porcentaje_match",
+            "clasificacion",
+            "recomendaciones",
+            "fecha_creacion",
         ]

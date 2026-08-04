@@ -52,6 +52,30 @@ export interface Curriculum {
   fecha_subida:    string
 }
 
+export interface DatosOferta {
+  titulo_puesto:         string
+  empresa:                string
+  ubicacion:              string
+  descripcion:            string
+  requisitos:             string
+  habilidades:            string
+  estudios_requeridos:    string
+  experiencia_requerida:  string
+}
+
+export interface Oferta extends DatosOferta {
+  id:                            number
+  habilidades_coincidentes:      string[]
+  habilidades_faltantes:         string[]
+  palabras_clave_coincidentes:   string[]
+  experiencia_compatible:        boolean
+  estudios_compatibles:          boolean
+  porcentaje_match:              number
+  clasificacion:                 string
+  recomendaciones:               string[]
+  fecha_creacion:                string
+}
+
 // --- Autenticación ---
 
 // Los errores de DRF llegan como { campo: ["mensaje"] } o { non_field_errors: ["mensaje"] }.
@@ -204,5 +228,33 @@ export async function obtenerHistorialCV(token: string): Promise<Curriculum[]> {
     headers: { 'Authorization': `Token ${token}` }
   })
   if (!respuesta.ok) throw new Error('Error al obtener el historial de CV')
+  return respuesta.json()
+}
+
+// --- Comparación con ofertas de empleo (Fase 7) ---
+
+// POST — guarda la oferta y devuelve la comparación con el perfil y el CV del usuario
+export async function crearOferta(token: string, datos: DatosOferta): Promise<Oferta> {
+  const respuesta = await fetch(`${BASE_URL}/usuarios/ofertas/crear/`, {
+    method:  'POST',
+    headers: {
+      'Content-Type':  'application/json',
+      'Authorization': `Token ${token}`
+    },
+    body: JSON.stringify(datos)
+  })
+  if (!respuesta.ok) {
+    const error = await respuesta.json()
+    throw new Error(extraerPrimerError(error, 'Error al comparar la oferta'))
+  }
+  return respuesta.json()
+}
+
+// GET — devuelve todas las ofertas comparadas del usuario
+export async function obtenerHistorialOfertas(token: string): Promise<Oferta[]> {
+  const respuesta = await fetch(`${BASE_URL}/usuarios/ofertas/historial/`, {
+    headers: { 'Authorization': `Token ${token}` }
+  })
+  if (!respuesta.ok) throw new Error('Error al obtener el historial de ofertas')
   return respuesta.json()
 }
