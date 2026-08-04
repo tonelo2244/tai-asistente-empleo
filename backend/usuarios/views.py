@@ -4,7 +4,7 @@ from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
 from rest_framework.authtoken.models import Token
 
-from .models import Perfil, PerfilProfesional, ResultadoAnalisis, Curriculum, Oferta
+from .models import Perfil, PerfilProfesional, ResultadoAnalisis, Curriculum, Oferta, OptimizacionLinkedIn
 
 from .serializers import (
     RegistroSerializer,
@@ -16,10 +16,13 @@ from .serializers import (
     CurriculumSerializer,
     OfertaCreateSerializer,
     OfertaSerializer,
+    OptimizacionLinkedInCreateSerializer,
+    OptimizacionLinkedInSerializer,
 )
 
 from .utils import analizar_perfil, analizar_perfil_ia, extraer_texto_pdf, analizar_cv_ia
 from .comparador import DatosOferta, DatosCandidato, comparar_oferta_ia
+from .optimizador_linkedin import DatosLinkedIn, DatosContexto, optimizar_linkedin_ia
 
 
 @api_view(['GET'])
@@ -249,4 +252,60 @@ def crear_oferta(request):
 def historial_ofertas(request):
     ofertas = Oferta.objects.filter(usuario=request.user)
     serializer = OfertaSerializer(ofertas, many=True)
+    return Response(serializer.data)
+
+
+@api_view(['POST'])
+@permission_classes([IsAuthenticated])
+def crear_optimizacion_linkedin(request):
+    serializer = OptimizacionLinkedInCreateSerializer(data=request.data)
+
+    if not serializer.is_valid():
+        return Response(serializer.errors, status=400)
+
+    datos = serializer.validated_data
+    perfil, _ = PerfilProfesional.objects.get_or_create(usuario=request.user)
+    cv = Curriculum.objects.filter(usuario=request.user).first()
+
+    datos_linkedin = DatosLinkedIn(
+        titular_actual=datos.get('titular_actual', ''),
+        extracto=datos['extracto'],
+        experiencia=datos.get('experiencia', ''),
+        estudios=datos.get('estudios', ''),
+        habilidades=datos.get('habilidades', ''),
+    )
+    contexto = DatosContexto(
+        perfil_experiencia=perfil.experiencia,
+        perfil_estudios=perfil.estudios,
+        perfil_habilidades=perfil.habilidades,
+        texto_cv=cv.texto_extraido if cv else '',
+    )
+
+    resultado = optimizar_linkedin_ia(datos_linkedin, contexto)
+
+    # El propietario del análisis es siempre el usuario autenticado; el
+    # payload del cliente nunca puede indicar ni sobrescribir este campo.
+    optimizacion = OptimizacionLinkedIn.objects.create(
+        usuario=request.user,
+        titular_actual=datos_linkedin.titular_actual,
+        extracto=datos_linkedin.extracto,
+        experiencia=datos_linkedin.experiencia,
+        estudios=datos_linkedin.estudios,
+        habilidades=datos_linkedin.habilidades,
+        puntuacion=resultado["puntuacion"],
+        clasificacion=resultado["clasificacion"],
+        titular_optimizado=resultado["titular_optimizado"],
+        fortalezas=resultado["fortalezas"],
+        debilidades=resultado["debilidades"],
+        plan_mejora=resultado["plan_mejora"],
+    )
+
+    return Response(OptimizacionLinkedInSerializer(optimizacion).data, status=201)
+
+
+@api_view(['GET'])
+@permission_classes([IsAuthenticated])
+def historial_linkedin(request):
+    optimizaciones = OptimizacionLinkedIn.objects.filter(usuario=request.user)
+    serializer = OptimizacionLinkedInSerializer(optimizaciones, many=True)
     return Response(serializer.data)

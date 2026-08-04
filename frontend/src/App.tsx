@@ -12,6 +12,7 @@ import PerfilProfesional from './pages/PerfilProfesional'
 import AnalisisPerfilPage from './pages/AnalisisPerfil'
 import AnalisisCVPage from './pages/AnalisisCV'
 import CompararOfertaPage from './pages/CompararOferta'
+import OptimizarLinkedInPage from './pages/OptimizarLinkedIn'
 
 function RutaProtegida({ children }: { children: React.ReactNode }) {
   const { token } = useAuth()
@@ -70,6 +71,15 @@ function AppRoutes() {
         element={
           <RutaProtegida>
             <CompararOfertaPage />
+          </RutaProtegida>
+        }
+      />
+
+      <Route
+        path="/linkedin"
+        element={
+          <RutaProtegida>
+            <OptimizarLinkedInPage />
           </RutaProtegida>
         }
       />

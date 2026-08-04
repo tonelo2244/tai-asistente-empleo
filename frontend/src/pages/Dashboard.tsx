@@ -12,6 +12,7 @@ import {
   Sparkles,
   FileUp,
   Briefcase,
+  IdCard,
 } from 'lucide-react'
 import { useAuth } from '../context/AuthContext'
 import { ping } from '../services/api'
@@ -171,6 +172,21 @@ function Dashboard() {
             </div>
             <span className="card-link">
               Comparar oferta <ArrowRight size={14} />
+            </span>
+          </Link>
+
+          <Link to="/linkedin" className="card">
+            <div className="card-icon">
+              <IdCard size={22} />
+            </div>
+            <div className="card-content">
+              <h3>Optimizar mi LinkedIn</h3>
+              <p>
+                Analiza tu perfil de LinkedIn y recibe un titular optimizado y un plan de mejora.
+              </p>
+            </div>
+            <span className="card-link">
+              Optimizar perfil <ArrowRight size={14} />
             </span>
           </Link>
         </section>

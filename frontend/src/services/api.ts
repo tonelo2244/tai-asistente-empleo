@@ -76,6 +76,25 @@ export interface Oferta extends DatosOferta {
   fecha_creacion:                string
 }
 
+export interface DatosLinkedIn {
+  titular_actual: string
+  extracto:       string
+  experiencia:    string
+  estudios:       string
+  habilidades:    string
+}
+
+export interface OptimizacionLinkedIn extends DatosLinkedIn {
+  id:                  number
+  puntuacion:          number
+  clasificacion:       string
+  titular_optimizado:  string
+  fortalezas:          string[]
+  debilidades:         string[]
+  plan_mejora:         string[]
+  fecha_creacion:      string
+}
+
 // --- Autenticación ---
 
 // Los errores de DRF llegan como { campo: ["mensaje"] } o { non_field_errors: ["mensaje"] }.
@@ -256,5 +275,36 @@ export async function obtenerHistorialOfertas(token: string): Promise<Oferta[]> 
     headers: { 'Authorization': `Token ${token}` }
   })
   if (!respuesta.ok) throw new Error('Error al obtener el historial de ofertas')
+  return respuesta.json()
+}
+
+// --- Optimización de LinkedIn (Fase 8) ---
+
+// POST — analiza el perfil de LinkedIn y devuelve la optimización
+export async function crearOptimizacionLinkedIn(
+  token: string,
+  datos: DatosLinkedIn
+): Promise<OptimizacionLinkedIn> {
+  const respuesta = await fetch(`${BASE_URL}/usuarios/linkedin/crear/`, {
+    method:  'POST',
+    headers: {
+      'Content-Type':  'application/json',
+      'Authorization': `Token ${token}`
+    },
+    body: JSON.stringify(datos)
+  })
+  if (!respuesta.ok) {
+    const error = await respuesta.json()
+    throw new Error(extraerPrimerError(error, 'Error al optimizar el perfil de LinkedIn'))
+  }
+  return respuesta.json()
+}
+
+// GET — devuelve todas las optimizaciones de LinkedIn del usuario
+export async function obtenerHistorialLinkedIn(token: string): Promise<OptimizacionLinkedIn[]> {
+  const respuesta = await fetch(`${BASE_URL}/usuarios/linkedin/historial/`, {
+    headers: { 'Authorization': `Token ${token}` }
+  })
+  if (!respuesta.ok) throw new Error('Error al obtener el historial de LinkedIn')
   return respuesta.json()
 }

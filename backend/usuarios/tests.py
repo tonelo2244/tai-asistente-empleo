@@ -9,6 +9,7 @@ from pypdf import PdfWriter
 from pypdf.generic import DecodedStreamObject, DictionaryObject, NameObject
 from rest_framework.authtoken.models import Token
 
+from . import optimizador_linkedin as li
 from .comparador import (
     DatosCandidato,
     DatosOferta,
@@ -19,7 +20,14 @@ from .comparador import (
     evaluar_estudios,
     evaluar_experiencia,
 )
-from .models import Curriculum, Oferta, Perfil, PerfilProfesional, ResultadoAnalisis
+from .models import (
+    Curriculum,
+    Oferta,
+    OptimizacionLinkedIn,
+    Perfil,
+    PerfilProfesional,
+    ResultadoAnalisis,
+)
 from .utils import calcular_puntuacion
 
 
@@ -852,5 +860,284 @@ class OfertaTests(TestCase):
 
         historial_b = self.client.get(
             '/api/usuarios/ofertas/historial/', **self.auth_headers(self.token_b)
+        )
+        self.assertEqual(historial_b.json(), [])
+
+
+class OptimizadorLinkedInTests(SimpleTestCase):
+    """Tests unitarios del motor de reglas, sin BD (usuarios/optimizador_linkedin.py)."""
+
+    def test_evaluar_titular_vacio(self):
+        puntos, fortalezas, debilidades, recomendaciones = li.evaluar_titular('', '')
+        self.assertEqual(puntos, 0)
+        self.assertEqual(fortalezas, [])
+        self.assertGreater(len(debilidades), 0)
+        self.assertGreater(len(recomendaciones), 0)
+
+    def test_evaluar_titular_completo_con_keywords(self):
+        puntos, fortalezas, debilidades, recomendaciones = li.evaluar_titular(
+            'Desarrollador Backend con Python y Django', ''
+        )
+        self.assertEqual(puntos, 15)
+        self.assertEqual(len(fortalezas), 2)
+        self.assertEqual(debilidades, [])
+
+    def test_evaluar_extracto_niveles(self):
+        corto, *_ = li.evaluar_extracto('Breve descripción.')
+        medio, *_ = li.evaluar_extracto('palabra ' * 80)
+        largo, *_ = li.evaluar_extracto('palabra ' * 160)
+
+        self.assertEqual(corto, 0)
+        self.assertEqual(medio, 12)
+        self.assertEqual(largo, 20)
+
+    def test_evaluar_palabras_clave_niveles(self):
+        sin_keywords, *_ = li.evaluar_palabras_clave('perfil profesional sin tecnologías')
+        pocas, *_ = li.evaluar_palabras_clave('Trabajo con Python')
+        muchas, *_ = li.evaluar_palabras_clave('Python, Django, React, TypeScript, Docker')
+
+        self.assertEqual(sin_keywords, 0)
+        self.assertEqual(pocas, 8)
+        self.assertEqual(muchas, 15)
+
+    def test_evaluar_habilidades(self):
+        vacio, *_ = li.evaluar_habilidades('')
+        sin_keywords, *_ = li.evaluar_habilidades('Trabajo en equipo, comunicación')
+        con_keywords, *_ = li.evaluar_habilidades('Python, Django, Git')
+
+        self.assertEqual(vacio, 0)
+        self.assertEqual(sin_keywords, 5)
+        self.assertEqual(con_keywords, 15)
+
+    def test_evaluar_experiencia(self):
+        vacio, *_ = li.evaluar_experiencia('')
+        breve, *_ = li.evaluar_experiencia('Becario 3 meses.')
+        detallada, *_ = li.evaluar_experiencia('Desarrollador backend ' * 10)
+
+        self.assertEqual(vacio, 0)
+        self.assertEqual(breve, 7)
+        self.assertEqual(detallada, 15)
+
+    def test_evaluar_estudios(self):
+        vacio, *_ = li.evaluar_estudios('')
+        con_texto, *_ = li.evaluar_estudios('Grado en Ingeniería Informática')
+
+        self.assertEqual(vacio, 0)
+        self.assertEqual(con_texto, 10)
+
+    def test_evaluar_coherencia_perfil_sin_perfil_no_penaliza(self):
+        puntos, fortalezas, debilidades, recomendaciones = li.evaluar_coherencia_perfil(
+            'Python Django', ''
+        )
+        self.assertEqual(puntos, 5)
+        self.assertEqual(debilidades, [])
+
+    def test_evaluar_coherencia_perfil_coincide(self):
+        puntos, fortalezas, debilidades, recomendaciones = li.evaluar_coherencia_perfil(
+            'Desarrollador con experiencia en Python', 'Experiencia en Python y Django'
+        )
+        self.assertEqual(puntos, 5)
+        self.assertGreater(len(fortalezas), 0)
+
+    def test_evaluar_coherencia_perfil_no_coincide(self):
+        puntos, fortalezas, debilidades, recomendaciones = li.evaluar_coherencia_perfil(
+            'Diseñador gráfico creativo', 'Contable con experiencia fiscal'
+        )
+        self.assertEqual(puntos, 0)
+        self.assertGreater(len(debilidades), 0)
+
+    def test_evaluar_coherencia_cv_sin_cv_no_penaliza(self):
+        puntos, fortalezas, debilidades, recomendaciones = li.evaluar_coherencia_cv(
+            'Python Django', ''
+        )
+        self.assertEqual(puntos, 5)
+        self.assertEqual(debilidades, [])
+
+    def test_generar_titular_optimizado_con_datos_reales(self):
+        datos = li.DatosLinkedIn(
+            titular_actual='Desarrollador Full Stack',
+            habilidades='Python, Django, React, TypeScript',
+        )
+        contexto = li.DatosContexto()
+
+        titular = li.generar_titular_optimizado(datos, contexto)
+
+        self.assertIn('Desarrollador Full Stack', titular)
+        self.assertIn('Django', titular)
+        self.assertIn('React', titular)
+        self.assertIn('Desarrollo Web', titular)
+
+    def test_generar_titular_optimizado_sin_datos_devuelve_vacio(self):
+        titular = li.generar_titular_optimizado(li.DatosLinkedIn(), li.DatosContexto())
+        self.assertEqual(titular, '')
+
+    def test_generar_titular_optimizado_no_inventa_tecnologias(self):
+        datos = li.DatosLinkedIn(titular_actual='Analista de datos', habilidades='Python')
+        contexto = li.DatosContexto()
+
+        titular = li.generar_titular_optimizado(datos, contexto)
+
+        self.assertNotIn('React', titular)
+        self.assertNotIn('Docker', titular)
+        self.assertNotIn('Django', titular)
+
+    def test_optimizar_linkedin_completo(self):
+        datos = li.DatosLinkedIn(
+            titular_actual='Desarrollador Backend',
+            extracto='Desarrollador backend con experiencia en Python y Django. ' * 10,
+            experiencia='Desarrollador en TechCorp durante 3 años trabajando con Python y Django. ' * 2,
+            estudios='Grado en Ingeniería Informática',
+            habilidades='Python, Django, SQL, Git',
+        )
+        contexto = li.DatosContexto(
+            perfil_experiencia='Desarrollador backend con Python',
+            perfil_estudios='Grado en Ingeniería Informática',
+            perfil_habilidades='Python, Django',
+            texto_cv='Desarrollador backend con experiencia en Python y Django',
+        )
+
+        resultado = li.optimizar_linkedin(datos, contexto)
+
+        self.assertGreaterEqual(resultado['puntuacion'], 0)
+        self.assertLessEqual(resultado['puntuacion'], 100)
+        self.assertIn(resultado['clasificacion'], [
+            'Excelente', 'Muy buena', 'Buena', 'Mejorable', 'Insuficiente'
+        ])
+        self.assertTrue(resultado['titular_optimizado'])
+        self.assertGreater(len(resultado['fortalezas']), 0)
+
+    def test_optimizar_linkedin_sin_contexto_no_falla(self):
+        datos = li.DatosLinkedIn(extracto='Breve extracto de prueba.')
+        contexto = li.DatosContexto()
+
+        resultado = li.optimizar_linkedin(datos, contexto)
+
+        self.assertGreaterEqual(resultado['puntuacion'], 0)
+        self.assertLessEqual(resultado['puntuacion'], 100)
+        self.assertGreater(len(resultado['plan_mejora']), 0)
+
+
+class OptimizacionLinkedInTests(TestCase):
+    def setUp(self):
+        self.user_a = User.objects.create_user(username='juan', password='clave12345')
+        Perfil.objects.create(usuario=self.user_a, rol='usuario')
+        self.token_a = Token.objects.create(user=self.user_a)
+
+        self.user_b = User.objects.create_user(username='maria', password='clave12345')
+        Perfil.objects.create(usuario=self.user_b, rol='usuario')
+        self.token_b = Token.objects.create(user=self.user_b)
+
+    def auth_headers(self, token):
+        return {'HTTP_AUTHORIZATION': f'Token {token.key}'}
+
+    def datos_validos(self, **overrides):
+        datos = {
+            'titular_actual': 'Desarrollador Backend',
+            'extracto': 'Desarrollador backend con experiencia en Python y Django. ' * 10,
+            'experiencia': 'Desarrollador en TechCorp durante 3 años. ' * 5,
+            'estudios': 'Grado en Ingeniería Informática',
+            'habilidades': 'Python, Django, SQL, Git',
+        }
+        datos.update(overrides)
+        return datos
+
+    def test_acceso_sin_token_es_rechazado(self):
+        self.assertEqual(
+            self.client.post(
+                '/api/usuarios/linkedin/crear/', {}, content_type='application/json'
+            ).status_code,
+            401,
+        )
+        self.assertEqual(self.client.get('/api/usuarios/linkedin/historial/').status_code, 401)
+
+    def test_extracto_obligatorio(self):
+        respuesta = self.client.post(
+            '/api/usuarios/linkedin/crear/',
+            self.datos_validos(extracto=''),
+            content_type='application/json',
+            **self.auth_headers(self.token_a),
+        )
+        self.assertEqual(respuesta.status_code, 400)
+        self.assertIn('extracto', respuesta.json())
+
+    def test_crear_optimizacion_valida_persiste(self):
+        respuesta = self.client.post(
+            '/api/usuarios/linkedin/crear/',
+            self.datos_validos(),
+            content_type='application/json',
+            **self.auth_headers(self.token_a),
+        )
+
+        self.assertEqual(respuesta.status_code, 201)
+        datos = respuesta.json()
+        self.assertGreaterEqual(datos['puntuacion'], 0)
+        self.assertLessEqual(datos['puntuacion'], 100)
+        self.assertIn(datos['clasificacion'], [
+            'Excelente', 'Muy buena', 'Buena', 'Mejorable', 'Insuficiente'
+        ])
+        self.assertTrue(datos['titular_optimizado'])
+        self.assertTrue(
+            OptimizacionLinkedIn.objects.filter(usuario=self.user_a).exists()
+        )
+
+    def test_optimizacion_con_perfil_vacio_no_falla(self):
+        # El perfil profesional se crea vacío automáticamente (get_or_create)
+        respuesta = self.client.post(
+            '/api/usuarios/linkedin/crear/',
+            self.datos_validos(),
+            content_type='application/json',
+            **self.auth_headers(self.token_a),
+        )
+        self.assertEqual(respuesta.status_code, 201)
+
+    def test_optimizacion_sin_cv_no_falla(self):
+        # No se sube ningún CV para este usuario
+        respuesta = self.client.post(
+            '/api/usuarios/linkedin/crear/',
+            self.datos_validos(),
+            content_type='application/json',
+            **self.auth_headers(self.token_a),
+        )
+        self.assertEqual(respuesta.status_code, 201)
+
+    def test_usuario_no_puede_indicar_propietario(self):
+        respuesta = self.client.post(
+            '/api/usuarios/linkedin/crear/',
+            self.datos_validos(usuario=self.user_b.id),
+            content_type='application/json',
+            **self.auth_headers(self.token_a),
+        )
+
+        self.assertEqual(respuesta.status_code, 201)
+        optimizacion = OptimizacionLinkedIn.objects.get(id=respuesta.json()['id'])
+        self.assertEqual(optimizacion.usuario, self.user_a)
+
+    def test_historial_ordenado_por_fecha_descendente(self):
+        for i in range(3):
+            self.client.post(
+                '/api/usuarios/linkedin/crear/',
+                self.datos_validos(titular_actual=f'Titular {i}'),
+                content_type='application/json',
+                **self.auth_headers(self.token_a),
+            )
+
+        historial = self.client.get(
+            '/api/usuarios/linkedin/historial/', **self.auth_headers(self.token_a)
+        ).json()
+
+        ids = [item['id'] for item in historial]
+        self.assertEqual(len(ids), 3)
+        self.assertEqual(ids, sorted(ids, reverse=True))
+
+    def test_aislamiento_entre_usuarios(self):
+        self.client.post(
+            '/api/usuarios/linkedin/crear/',
+            self.datos_validos(),
+            content_type='application/json',
+            **self.auth_headers(self.token_a),
+        )
+
+        historial_b = self.client.get(
+            '/api/usuarios/linkedin/historial/', **self.auth_headers(self.token_b)
         )
         self.assertEqual(historial_b.json(), [])

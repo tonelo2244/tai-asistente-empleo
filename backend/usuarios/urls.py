@@ -29,4 +29,8 @@ urlpatterns = [
     # Fase 7 — comparación con ofertas de empleo
     path('ofertas/crear/',       views.crear_oferta),
     path('ofertas/historial/',   views.historial_ofertas),
+
+    # Fase 8 — optimización de LinkedIn
+    path('linkedin/crear/',      views.crear_optimizacion_linkedin),
+    path('linkedin/historial/',  views.historial_linkedin),
 ]

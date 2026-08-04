@@ -11,6 +11,7 @@ from .models import (
     ResultadoAnalisis,
     Curriculum,
     Oferta,
+    OptimizacionLinkedIn,
 )
 
 
@@ -279,5 +280,55 @@ class OfertaSerializer(serializers.ModelSerializer):
             "porcentaje_match",
             "clasificacion",
             "recomendaciones",
+            "fecha_creacion",
+        ]
+
+
+# -----------------------------
+# Optimización de LinkedIn — Fase 8
+# -----------------------------
+
+class OptimizacionLinkedInCreateSerializer(serializers.Serializer):
+    titular_actual = serializers.CharField(max_length=220, required=False, allow_blank=True)
+    extracto = serializers.CharField(max_length=2600)
+    experiencia = serializers.CharField(max_length=4000, required=False, allow_blank=True)
+    estudios = serializers.CharField(max_length=2000, required=False, allow_blank=True)
+    habilidades = serializers.CharField(max_length=1000, required=False, allow_blank=True)
+
+    def validate(self, data):
+        # Sanitización básica: quitar espacios sobrantes en los campos de texto recibidos.
+        for campo, valor in data.items():
+            if isinstance(valor, str):
+                data[campo] = valor.strip()
+
+        if not data.get('extracto'):
+            raise serializers.ValidationError(
+                {'extracto': "El extracto (\"Acerca de\") es obligatorio."}
+            )
+
+        return data
+
+
+class OptimizacionLinkedInSerializer(serializers.ModelSerializer):
+    fecha_creacion = serializers.DateTimeField(
+        format="%d/%m/%Y %H:%M",
+        read_only=True
+    )
+
+    class Meta:
+        model = OptimizacionLinkedIn
+        fields = [
+            "id",
+            "titular_actual",
+            "extracto",
+            "experiencia",
+            "estudios",
+            "habilidades",
+            "puntuacion",
+            "clasificacion",
+            "titular_optimizado",
+            "fortalezas",
+            "debilidades",
+            "plan_mejora",
             "fecha_creacion",
         ]

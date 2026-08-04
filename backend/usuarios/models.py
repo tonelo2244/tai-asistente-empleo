@@ -132,3 +132,36 @@ class Oferta(models.Model):
 
     def __str__(self):
         return f"{self.titulo_puesto} en {self.empresa} — {self.usuario.username}"
+
+
+class OptimizacionLinkedIn(models.Model):
+    # Un usuario puede optimizar su perfil de LinkedIn varias veces
+    usuario = models.ForeignKey(User, on_delete=models.CASCADE)
+
+    # Datos originales del perfil de LinkedIn introducidos por el usuario
+    titular_actual = models.CharField(max_length=220, blank=True)
+    extracto = models.TextField()
+    experiencia = models.TextField(blank=True)
+    estudios = models.TextField(blank=True)
+    habilidades = models.TextField(blank=True)
+
+    # Resultado del análisis — misma filosofía que Curriculum/Oferta
+    puntuacion = models.IntegerField(default=0)
+    clasificacion = models.CharField(
+        max_length=20, choices=CLASIFICACIONES_MATCH, default='Insuficiente'
+    )
+    titular_optimizado = models.CharField(max_length=300, blank=True)
+    fortalezas = models.JSONField(default=list)
+    debilidades = models.JSONField(default=list)
+    plan_mejora = models.JSONField(default=list)
+
+    fecha_creacion = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ['-fecha_creacion']
+
+    def __str__(self):
+        return (
+            f"Optimización LinkedIn de {self.usuario.username} — "
+            f"{self.fecha_creacion.strftime('%d/%m/%Y %H:%M')}"
+        )
