@@ -12,6 +12,8 @@ from .models import (
     Curriculum,
     Oferta,
     OptimizacionLinkedIn,
+    SimulacionEntrevista,
+    PreguntaRespuesta,
 )
 
 
@@ -330,5 +332,66 @@ class OptimizacionLinkedInSerializer(serializers.ModelSerializer):
             "fortalezas",
             "debilidades",
             "plan_mejora",
+            "fecha_creacion",
+        ]
+
+
+# -----------------------------
+# Simulador de entrevistas — Fase 9
+# -----------------------------
+
+class RespuestaEntrevistaInputSerializer(serializers.Serializer):
+    """Una pregunta (generada por el motor de reglas) ya respondida por el usuario."""
+    tipo = serializers.CharField(max_length=30)
+    pregunta = serializers.CharField(max_length=500)
+    respuesta = serializers.CharField(max_length=3000, required=False, allow_blank=True)
+    orden = serializers.IntegerField(min_value=1)
+
+    def validate(self, data):
+        if isinstance(data.get('respuesta'), str):
+            data['respuesta'] = data['respuesta'].strip()
+        return data
+
+
+class FinalizarEntrevistaSerializer(serializers.Serializer):
+    respuestas = RespuestaEntrevistaInputSerializer(many=True)
+
+    def validate_respuestas(self, value):
+        if not value:
+            raise serializers.ValidationError(
+                "Debes incluir al menos una pregunta para finalizar la entrevista."
+            )
+        return value
+
+
+class PreguntaRespuestaSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = PreguntaRespuesta
+        fields = [
+            "id",
+            "tipo",
+            "pregunta",
+            "respuesta",
+            "orden",
+        ]
+
+
+class SimulacionEntrevistaSerializer(serializers.ModelSerializer):
+    fecha_creacion = serializers.DateTimeField(
+        format="%d/%m/%Y %H:%M",
+        read_only=True
+    )
+    preguntas = PreguntaRespuestaSerializer(many=True, read_only=True)
+
+    class Meta:
+        model = SimulacionEntrevista
+        fields = [
+            "id",
+            "puntuacion",
+            "clasificacion",
+            "fortalezas",
+            "aspectos_mejora",
+            "recomendaciones",
+            "preguntas",
             "fecha_creacion",
         ]

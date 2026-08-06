@@ -33,4 +33,9 @@ urlpatterns = [
     # Fase 8 — optimización de LinkedIn
     path('linkedin/crear/',      views.crear_optimizacion_linkedin),
     path('linkedin/historial/',  views.historial_linkedin),
+
+    # Fase 9 — simulador de entrevistas
+    path('entrevista/iniciar/',    views.iniciar_entrevista),
+    path('entrevista/finalizar/',  views.finalizar_entrevista),
+    path('entrevista/historial/',  views.historial_entrevistas),
 ]

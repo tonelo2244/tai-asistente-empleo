@@ -13,6 +13,7 @@ import AnalisisPerfilPage from './pages/AnalisisPerfil'
 import AnalisisCVPage from './pages/AnalisisCV'
 import CompararOfertaPage from './pages/CompararOferta'
 import OptimizarLinkedInPage from './pages/OptimizarLinkedIn'
+import SimuladorEntrevistaPage from './pages/SimuladorEntrevista'
 
 function RutaProtegida({ children }: { children: React.ReactNode }) {
   const { token } = useAuth()
@@ -80,6 +81,15 @@ function AppRoutes() {
         element={
           <RutaProtegida>
             <OptimizarLinkedInPage />
+          </RutaProtegida>
+        }
+      />
+
+      <Route
+        path="/entrevista"
+        element={
+          <RutaProtegida>
+            <SimuladorEntrevistaPage />
           </RutaProtegida>
         }
       />

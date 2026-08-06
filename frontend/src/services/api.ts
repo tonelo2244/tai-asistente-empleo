@@ -95,6 +95,27 @@ export interface OptimizacionLinkedIn extends DatosLinkedIn {
   fecha_creacion:      string
 }
 
+export interface PreguntaEntrevista {
+  orden:    number
+  tipo:     string
+  pregunta: string
+}
+
+export interface RespuestaEntrevista extends PreguntaEntrevista {
+  respuesta: string
+}
+
+export interface SimulacionEntrevista {
+  id:              number
+  puntuacion:      number
+  clasificacion:   string
+  fortalezas:      string[]
+  aspectos_mejora: string[]
+  recomendaciones: string[]
+  preguntas:       RespuestaEntrevista[]
+  fecha_creacion:  string
+}
+
 // --- Autenticación ---
 
 // Los errores de DRF llegan como { campo: ["mensaje"] } o { non_field_errors: ["mensaje"] }.
@@ -306,5 +327,46 @@ export async function obtenerHistorialLinkedIn(token: string): Promise<Optimizac
     headers: { 'Authorization': `Token ${token}` }
   })
   if (!respuesta.ok) throw new Error('Error al obtener el historial de LinkedIn')
+  return respuesta.json()
+}
+
+// --- Simulador de entrevistas (Fase 9) ---
+
+// POST — genera las preguntas de una nueva simulación (sin persistir todavía)
+export async function iniciarEntrevista(token: string): Promise<{ preguntas: PreguntaEntrevista[] }> {
+  const respuesta = await fetch(`${BASE_URL}/usuarios/entrevista/iniciar/`, {
+    method:  'POST',
+    headers: { 'Authorization': `Token ${token}` }
+  })
+  if (!respuesta.ok) throw new Error('Error al iniciar la simulación de entrevista')
+  return respuesta.json()
+}
+
+// POST — envía todas las respuestas, genera el feedback y persiste la simulación
+export async function finalizarEntrevista(
+  token: string,
+  respuestas: RespuestaEntrevista[]
+): Promise<SimulacionEntrevista> {
+  const respuesta = await fetch(`${BASE_URL}/usuarios/entrevista/finalizar/`, {
+    method:  'POST',
+    headers: {
+      'Content-Type':  'application/json',
+      'Authorization': `Token ${token}`
+    },
+    body: JSON.stringify({ respuestas })
+  })
+  if (!respuesta.ok) {
+    const error = await respuesta.json()
+    throw new Error(extraerPrimerError(error, 'Error al finalizar la entrevista'))
+  }
+  return respuesta.json()
+}
+
+// GET — devuelve todas las simulaciones de entrevista del usuario
+export async function obtenerHistorialEntrevistas(token: string): Promise<SimulacionEntrevista[]> {
+  const respuesta = await fetch(`${BASE_URL}/usuarios/entrevista/historial/`, {
+    headers: { 'Authorization': `Token ${token}` }
+  })
+  if (!respuesta.ok) throw new Error('Error al obtener el historial de entrevistas')
   return respuesta.json()
 }

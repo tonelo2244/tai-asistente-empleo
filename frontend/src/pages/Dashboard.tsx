@@ -13,6 +13,7 @@ import {
   FileUp,
   Briefcase,
   IdCard,
+  MessageSquare,
 } from 'lucide-react'
 import { useAuth } from '../context/AuthContext'
 import { ping } from '../services/api'
@@ -187,6 +188,21 @@ function Dashboard() {
             </div>
             <span className="card-link">
               Optimizar perfil <ArrowRight size={14} />
+            </span>
+          </Link>
+
+          <Link to="/entrevista" className="card">
+            <div className="card-icon">
+              <MessageSquare size={22} />
+            </div>
+            <div className="card-content">
+              <h3>Simulador de entrevistas</h3>
+              <p>
+                Practica con preguntas adaptadas a tu perfil y recibe feedback sobre tus respuestas.
+              </p>
+            </div>
+            <span className="card-link">
+              Iniciar simulación <ArrowRight size={14} />
             </span>
           </Link>
         </section>

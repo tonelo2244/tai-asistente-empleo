@@ -165,3 +165,51 @@ class OptimizacionLinkedIn(models.Model):
             f"Optimización LinkedIn de {self.usuario.username} — "
             f"{self.fecha_creacion.strftime('%d/%m/%Y %H:%M')}"
         )
+
+
+class SimulacionEntrevista(models.Model):
+    # Un usuario puede realizar varias simulaciones de entrevista
+    usuario = models.ForeignKey(User, on_delete=models.CASCADE)
+
+    # Resultado del feedback — misma filosofía que ResultadoAnalisis/Curriculum/Oferta/OptimizacionLinkedIn
+    puntuacion = models.IntegerField(default=0)
+    clasificacion = models.CharField(
+        max_length=20, choices=CLASIFICACIONES_MATCH, default='Insuficiente'
+    )
+    fortalezas = models.JSONField(default=list)
+    aspectos_mejora = models.JSONField(default=list)
+    recomendaciones = models.JSONField(default=list)
+
+    fecha_creacion = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ['-fecha_creacion']
+
+    def __str__(self):
+        return (
+            f"Simulación de entrevista de {self.usuario.username} — "
+            f"{self.fecha_creacion.strftime('%d/%m/%Y %H:%M')}"
+        )
+
+
+class PreguntaRespuesta(models.Model):
+    # Cada pregunta respondida pertenece a una única simulación
+    simulacion = models.ForeignKey(
+        SimulacionEntrevista, on_delete=models.CASCADE, related_name='preguntas'
+    )
+
+    # El tipo se valida en el motor de reglas (evaluador_entrevista.py), que
+    # debe permanecer independiente de Django; por eso no se usa `choices`
+    # aquí para no duplicar ni acoplar esa lista al ORM.
+    tipo = models.CharField(max_length=30)
+    pregunta = models.TextField()
+    respuesta = models.TextField(blank=True)
+    orden = models.PositiveIntegerField()
+
+    fecha_creacion = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ['orden']
+
+    def __str__(self):
+        return f"Pregunta {self.orden} de la simulación #{self.simulacion_id}"

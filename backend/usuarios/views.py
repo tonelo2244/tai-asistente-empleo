@@ -4,7 +4,16 @@ from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
 from rest_framework.authtoken.models import Token
 
-from .models import Perfil, PerfilProfesional, ResultadoAnalisis, Curriculum, Oferta, OptimizacionLinkedIn
+from .models import (
+    Perfil,
+    PerfilProfesional,
+    ResultadoAnalisis,
+    Curriculum,
+    Oferta,
+    OptimizacionLinkedIn,
+    SimulacionEntrevista,
+    PreguntaRespuesta,
+)
 
 from .serializers import (
     RegistroSerializer,
@@ -18,11 +27,19 @@ from .serializers import (
     OfertaSerializer,
     OptimizacionLinkedInCreateSerializer,
     OptimizacionLinkedInSerializer,
+    FinalizarEntrevistaSerializer,
+    SimulacionEntrevistaSerializer,
 )
 
 from .utils import analizar_perfil, analizar_perfil_ia, extraer_texto_pdf, analizar_cv_ia
 from .comparador import DatosOferta, DatosCandidato, comparar_oferta_ia
 from .optimizador_linkedin import DatosLinkedIn, DatosContexto, optimizar_linkedin_ia
+from .evaluador_entrevista import (
+    ContextoEntrevista,
+    RespuestaEntrevista,
+    generar_preguntas_ia,
+    evaluar_entrevista_ia,
+)
 
 
 @api_view(['GET'])
@@ -308,4 +325,96 @@ def crear_optimizacion_linkedin(request):
 def historial_linkedin(request):
     optimizaciones = OptimizacionLinkedIn.objects.filter(usuario=request.user)
     serializer = OptimizacionLinkedInSerializer(optimizaciones, many=True)
+    return Response(serializer.data)
+
+
+def _construir_contexto_entrevista(usuario):
+    """
+    Reúne los datos reales más recientes del usuario (Perfil, CV, última
+    oferta comparada y última optimización de LinkedIn) para adaptar las
+    preguntas y valorar la coherencia de las respuestas. Se reutiliza tanto
+    al iniciar como al finalizar la entrevista para no duplicar esta lógica.
+    """
+    perfil, _ = PerfilProfesional.objects.get_or_create(usuario=usuario)
+    cv = Curriculum.objects.filter(usuario=usuario).first()
+    oferta = Oferta.objects.filter(usuario=usuario).first()
+    linkedin = OptimizacionLinkedIn.objects.filter(usuario=usuario).first()
+
+    return ContextoEntrevista(
+        perfil_nombre=perfil.nombre_completo,
+        perfil_experiencia=perfil.experiencia,
+        perfil_estudios=perfil.estudios,
+        perfil_habilidades=perfil.habilidades,
+        texto_cv=cv.texto_extraido if cv else '',
+        oferta_titulo=oferta.titulo_puesto if oferta else '',
+        oferta_empresa=oferta.empresa if oferta else '',
+        oferta_habilidades=oferta.habilidades if oferta else '',
+        linkedin_titular=linkedin.titular_actual if linkedin else '',
+        linkedin_extracto=linkedin.extracto if linkedin else '',
+    )
+
+
+@api_view(['POST'])
+@permission_classes([IsAuthenticated])
+def iniciar_entrevista(request):
+    contexto = _construir_contexto_entrevista(request.user)
+    preguntas = generar_preguntas_ia(contexto)
+    return Response({"preguntas": preguntas})
+
+
+@api_view(['POST'])
+@permission_classes([IsAuthenticated])
+def finalizar_entrevista(request):
+    serializer = FinalizarEntrevistaSerializer(data=request.data)
+
+    if not serializer.is_valid():
+        return Response(serializer.errors, status=400)
+
+    respuestas_validadas = serializer.validated_data['respuestas']
+    contexto = _construir_contexto_entrevista(request.user)
+
+    respuestas_dominio = [
+        RespuestaEntrevista(
+            tipo=item['tipo'],
+            pregunta=item['pregunta'],
+            respuesta=item.get('respuesta', ''),
+            orden=item['orden'],
+        )
+        for item in respuestas_validadas
+    ]
+
+    resultado = evaluar_entrevista_ia(respuestas_dominio, contexto)
+
+    # El propietario de la simulación es siempre el usuario autenticado; el
+    # payload del cliente nunca puede indicar ni sobrescribir este campo.
+    simulacion = SimulacionEntrevista.objects.create(
+        usuario=request.user,
+        puntuacion=resultado["puntuacion"],
+        clasificacion=resultado["clasificacion"],
+        fortalezas=resultado["fortalezas"],
+        aspectos_mejora=resultado["aspectos_mejora"],
+        recomendaciones=resultado["recomendaciones"],
+    )
+
+    PreguntaRespuesta.objects.bulk_create([
+        PreguntaRespuesta(
+            simulacion=simulacion,
+            tipo=item['tipo'],
+            pregunta=item['pregunta'],
+            respuesta=item.get('respuesta', ''),
+            orden=item['orden'],
+        )
+        for item in respuestas_validadas
+    ])
+
+    return Response(SimulacionEntrevistaSerializer(simulacion).data, status=201)
+
+
+@api_view(['GET'])
+@permission_classes([IsAuthenticated])
+def historial_entrevistas(request):
+    simulaciones = SimulacionEntrevista.objects.filter(
+        usuario=request.user
+    ).prefetch_related('preguntas')
+    serializer = SimulacionEntrevistaSerializer(simulaciones, many=True)
     return Response(serializer.data)
