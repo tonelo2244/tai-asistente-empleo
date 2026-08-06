@@ -82,6 +82,18 @@ def crear_pdf(lineas=None):
     return buf.getvalue()
 
 
+class PingTests(TestCase):
+    def test_ping_raiz(self):
+        respuesta = self.client.get('/api/ping/')
+        self.assertEqual(respuesta.status_code, 200)
+        self.assertEqual(respuesta.json(), {"message": "Backend TAI funcionando"})
+
+    def test_ping_usuarios(self):
+        respuesta = self.client.get('/api/usuarios/ping/')
+        self.assertEqual(respuesta.status_code, 200)
+        self.assertEqual(respuesta.json(), {"message": "Backend TAI funcionando"})
+
+
 class RegistroTests(TestCase):
     def test_registro_correcto(self):
         respuesta = self.client.post('/api/usuarios/registro/', {
@@ -310,6 +322,32 @@ class CalcularPuntuacionTests(SimpleTestCase):
             self.assertLessEqual(puntuacion, 100)
 
 
+class AnalisisPerfilLegacyTests(TestCase):
+    """Endpoint heredado de la Fase 4 (`GET /analisis-perfil/`), se mantiene
+    para no romper enlaces existentes: análisis por reglas sin persistir."""
+
+    def setUp(self):
+        self.user = User.objects.create_user(username='juan', password='clave12345')
+        Perfil.objects.create(usuario=self.user, rol='usuario')
+        self.token = Token.objects.create(user=self.user)
+
+    def test_acceso_sin_token_es_rechazado(self):
+        respuesta = self.client.get('/api/usuarios/analisis-perfil/')
+        self.assertEqual(respuesta.status_code, 401)
+
+    def test_analisis_perfil_devuelve_resultado_por_reglas(self):
+        respuesta = self.client.get(
+            '/api/usuarios/analisis-perfil/',
+            HTTP_AUTHORIZATION=f'Token {self.token.key}',
+        )
+        self.assertEqual(respuesta.status_code, 200)
+        datos = respuesta.json()
+        self.assertIn('resumen', datos)
+        self.assertIn('fortalezas', datos)
+        self.assertIn('aspectos_mejora', datos)
+        self.assertIn('recomendaciones', datos)
+
+
 class AnalisisTests(TestCase):
     def setUp(self):
         self.user_a = User.objects.create_user(username='juan', password='clave12345')
@@ -394,6 +432,12 @@ class AnalisisTests(TestCase):
             '/api/usuarios/analisis/historial/', **self.auth_headers(self.token_b)
         )
         self.assertEqual(historial_b.json(), [])
+
+    def test_ultimo_analisis_sin_resultados_devuelve_404(self):
+        respuesta = self.client.get(
+            '/api/usuarios/analisis/ultimo/', **self.auth_headers(self.token_a)
+        )
+        self.assertEqual(respuesta.status_code, 404)
 
     def test_ultimo_analisis_devuelve_el_mas_reciente(self):
         primero = self.client.post(
