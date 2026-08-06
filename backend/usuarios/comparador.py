@@ -11,10 +11,10 @@ firma y la forma del resultado; hoy delega en `comparar_oferta()` (reglas
 propias) y en el futuro delegará en una llamada a OpenAI sin que las vistas
 que la usan tengan que cambiar.
 """
-import os
 import re
 from dataclasses import dataclass
 
+from . import openai_service
 from .utils import detectar_keywords
 
 STOPWORDS_ES = {
@@ -254,16 +254,18 @@ def comparar_oferta(oferta: DatosOferta, candidato: DatosCandidato) -> dict:
 
 def comparar_oferta_ia(oferta: DatosOferta, candidato: DatosCandidato) -> dict:
     """
-    Punto de entrada principal de la comparación.
-    De momento usa reglas propias (comparar_oferta), misma arquitectura
-    que analizar_perfil_ia() y analizar_cv_ia(). En el Sprint 10 esta
-    función delegará en OpenAI si existe OPENAI_API_KEY, manteniendo
-    exactamente la misma firma y forma de resultado.
+    Punto de entrada principal de la comparación. El motor de reglas
+    (comparar_oferta) se calcula siempre: las señales objetivas
+    (habilidades coincidentes/faltantes, porcentaje de match, experiencia
+    y estudios compatibles, clasificación) son siempre las calculadas por
+    reglas. Si hay una clave de OpenAI configurada y la llamada tiene
+    éxito, se sustituyen únicamente las recomendaciones por las generadas
+    por IA, coherentes con esas señales objetivas.
     """
-    openai_key = os.environ.get("OPENAI_API_KEY", "")
+    resultado = comparar_oferta(oferta, candidato)
 
-    if openai_key:
-        # Futura integración con OpenAI (Sprint 10).
-        pass
+    resultado_ia = openai_service.comparar_oferta(oferta, candidato, resultado)
+    if resultado_ia is not None:
+        resultado.update(resultado_ia)
 
-    return comparar_oferta(oferta, candidato)
+    return resultado

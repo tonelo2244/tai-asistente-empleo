@@ -14,9 +14,9 @@ No inventa experiencia, tecnologías ni certificaciones: el titular
 optimizado y las recomendaciones se construyen únicamente a partir de los
 datos reales proporcionados por el usuario.
 """
-import os
 from dataclasses import dataclass
 
+from . import openai_service
 from .comparador import clasificar_match, extraer_palabras_clave
 from .utils import detectar_keywords
 
@@ -347,16 +347,17 @@ def optimizar_linkedin(datos: DatosLinkedIn, contexto: DatosContexto) -> dict:
 
 def optimizar_linkedin_ia(datos: DatosLinkedIn, contexto: DatosContexto) -> dict:
     """
-    Punto de entrada principal de la optimización de LinkedIn.
-    De momento usa reglas propias (optimizar_linkedin), misma arquitectura
-    que analizar_perfil_ia(), analizar_cv_ia() y comparar_oferta_ia().
-    En el Sprint 10 esta función delegará en OpenAI si existe OPENAI_API_KEY,
-    manteniendo exactamente la misma firma y forma de resultado.
+    Punto de entrada principal de la optimización de LinkedIn. El motor de
+    reglas (optimizar_linkedin) se calcula siempre: la puntuación y la
+    clasificación son siempre las calculadas por reglas. Si hay una clave
+    de OpenAI configurada y la llamada tiene éxito, se sustituyen el
+    titular optimizado, las fortalezas, las debilidades y el plan de
+    mejora por los generados por IA a partir de los mismos datos reales.
     """
-    openai_key = os.environ.get("OPENAI_API_KEY", "")
+    resultado = optimizar_linkedin(datos, contexto)
 
-    if openai_key:
-        # Futura integración con OpenAI (Sprint 10).
-        pass
+    resultado_ia = openai_service.optimizar_linkedin(datos, contexto, resultado)
+    if resultado_ia is not None:
+        resultado.update(resultado_ia)
 
-    return optimizar_linkedin(datos, contexto)
+    return resultado

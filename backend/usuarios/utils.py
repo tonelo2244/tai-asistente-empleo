@@ -1,7 +1,8 @@
 import re
-import os
 
 from pypdf import PdfReader
+
+from . import openai_service
 
 KEYWORDS_TECNICAS = {
     'python': ['python', 'py'],
@@ -122,18 +123,20 @@ def analizar_perfil(perfil):
 
 def analizar_perfil_ia(perfil):
     """
-    Punto de entrada principal para el análisis.
-    De momento usa reglas propias.
-    Más adelante podrá usar OpenAI si existe OPENAI_API_KEY.
+    Punto de entrada principal para el análisis del perfil.
+    El motor de reglas (analizar_perfil) se calcula siempre: es tanto el
+    resultado por defecto como el contexto que usa la IA para no
+    contradecirse. Si hay una clave de OpenAI configurada y la llamada
+    tiene éxito, se sustituye el contenido cualitativo (resumen,
+    fortalezas, aspectos_mejora, recomendaciones) por el generado por IA;
+    la puntuación de completitud es siempre la calculada por reglas.
     """
-    openai_key = os.environ.get("OPENAI_API_KEY", "")
-
-    if openai_key:
-        # Futura integración con OpenAI.
-        pass
-
     resultado = analizar_perfil(perfil)
     resultado["puntuacion_completitud"] = calcular_puntuacion(perfil)
+
+    resultado_ia = openai_service.analizar_perfil(perfil, resultado)
+    if resultado_ia is not None:
+        resultado.update(resultado_ia)
 
     return resultado
 
@@ -282,15 +285,18 @@ def analizar_cv(texto):
 
 def analizar_cv_ia(texto):
     """
-    Punto de entrada principal para el análisis de CV.
-    De momento usa reglas propias.
-    Más adelante podrá usar OpenAI si existe OPENAI_API_KEY (misma
-    arquitectura que analizar_perfil_ia).
+    Punto de entrada principal para el análisis de CV. Misma arquitectura
+    que analizar_perfil_ia(): el motor de reglas (analizar_cv) se calcula
+    siempre y actúa como resultado por defecto y como contexto para la IA;
+    si hay una clave de OpenAI configurada y la llamada tiene éxito, se
+    sustituye el contenido cualitativo (resumen, fortalezas, debilidades,
+    recomendaciones) por el generado por IA. La puntuación es siempre la
+    calculada por reglas.
     """
-    openai_key = os.environ.get("OPENAI_API_KEY", "")
+    resultado = analizar_cv(texto)
 
-    if openai_key:
-        # Futura integración con OpenAI.
-        pass
+    resultado_ia = openai_service.analizar_cv(texto, resultado)
+    if resultado_ia is not None:
+        resultado.update(resultado_ia)
 
-    return analizar_cv(texto)
+    return resultado

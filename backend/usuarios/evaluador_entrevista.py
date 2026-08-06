@@ -16,6 +16,7 @@ usan tengan que cambiar.
 import os
 from dataclasses import dataclass
 
+from . import openai_service
 from .comparador import clasificar_match, extraer_palabras_clave
 from .utils import detectar_keywords
 
@@ -394,10 +395,18 @@ def evaluar_entrevista(respuestas: list, contexto: ContextoEntrevista) -> dict:
 
 def evaluar_entrevista_ia(respuestas: list, contexto: ContextoEntrevista) -> dict:
     """
-    Punto de entrada principal de la evaluación de la entrevista.
-    De momento usa reglas propias (evaluar_entrevista), misma arquitectura
-    que analizar_perfil_ia(), analizar_cv_ia(), comparar_oferta_ia() y
-    optimizar_linkedin_ia(). En el Sprint 10 esta función podrá delegar en
-    OpenAI, manteniendo exactamente la misma firma y forma de resultado.
+    Punto de entrada principal de la evaluación de la entrevista. El motor
+    de reglas (evaluar_entrevista) se calcula siempre: la puntuación y la
+    clasificación son siempre las calculadas por reglas, de forma
+    determinista y auditable. Si hay una clave de OpenAI configurada y la
+    llamada tiene éxito, se sustituyen las fortalezas, los aspectos de
+    mejora y las recomendaciones por el feedback generado por IA a partir
+    de las mismas respuestas y del mismo contexto real del usuario.
     """
-    return evaluar_entrevista(respuestas, contexto)
+    resultado = evaluar_entrevista(respuestas, contexto)
+
+    resultado_ia = openai_service.evaluar_entrevista(respuestas, contexto, resultado)
+    if resultado_ia is not None:
+        resultado.update(resultado_ia)
+
+    return resultado

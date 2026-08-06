@@ -1,7 +1,11 @@
 import io
+import json
 import shutil
 import tempfile
+from unittest.mock import MagicMock, patch
 
+import httpx
+import openai
 from django.contrib.auth.models import User
 from django.core.files.uploadedfile import SimpleUploadedFile
 from django.test import SimpleTestCase, TestCase, override_settings
@@ -9,6 +13,8 @@ from pypdf import PdfWriter
 from pypdf.generic import DecodedStreamObject, DictionaryObject, NameObject
 from rest_framework.authtoken.models import Token
 
+from . import evaluador_entrevista as ee
+from . import openai_service
 from . import optimizador_linkedin as li
 from .comparador import (
     DatosCandidato,
@@ -17,6 +23,7 @@ from .comparador import (
     clasificar_match,
     comparar_habilidades,
     comparar_oferta,
+    comparar_oferta_ia,
     evaluar_estudios,
     evaluar_experiencia,
 )
@@ -26,9 +33,17 @@ from .models import (
     OptimizacionLinkedIn,
     Perfil,
     PerfilProfesional,
+    PreguntaRespuesta,
     ResultadoAnalisis,
+    SimulacionEntrevista,
 )
-from .utils import calcular_puntuacion
+from .utils import (
+    analizar_cv,
+    analizar_cv_ia,
+    analizar_perfil,
+    analizar_perfil_ia,
+    calcular_puntuacion,
+)
 
 
 def crear_pdf(lineas=None):
@@ -1141,3 +1156,615 @@ class OptimizacionLinkedInTests(TestCase):
             '/api/usuarios/linkedin/historial/', **self.auth_headers(self.token_b)
         )
         self.assertEqual(historial_b.json(), [])
+
+
+class EvaluadorEntrevistaTests(SimpleTestCase):
+    """Tests unitarios del motor de reglas, sin BD (usuarios/evaluador_entrevista.py)."""
+
+    RESPUESTA_ADECUADA = (
+        "En mi experiencia profesional he liderado varios proyectos de desarrollo, "
+        "trabajando siempre en equipo con gran responsabilidad y compromiso para "
+        "alcanzar los objetivos marcados, mejorando la comunicación y colaboración "
+        "con el cliente para lograr resultados de calidad."
+    )
+
+    def test_generar_preguntas_genera_los_diez_tipos(self):
+        preguntas = ee.generar_preguntas(ee.ContextoEntrevista())
+        self.assertEqual(len(preguntas), 10)
+        self.assertEqual({p['tipo'] for p in preguntas}, set(ee.TIPOS_PREGUNTA_ORDEN))
+
+    def test_generar_preguntas_orden_correcto(self):
+        preguntas = ee.generar_preguntas(ee.ContextoEntrevista())
+        self.assertEqual([p['orden'] for p in preguntas], list(range(1, 11)))
+
+    def test_generar_preguntas_se_adapta_a_la_oferta(self):
+        contexto = ee.ContextoEntrevista(oferta_empresa='TechCorp', oferta_titulo='Backend Developer')
+        preguntas = ee.generar_preguntas(contexto)
+        pregunta_motivacion = next(p for p in preguntas if p['tipo'] == 'motivacion')
+        self.assertIn('TechCorp', pregunta_motivacion['pregunta'])
+
+    def test_generar_preguntas_sin_contexto_no_falla(self):
+        preguntas = ee.generar_preguntas(ee.ContextoEntrevista())
+        self.assertEqual(len(preguntas), 10)
+        for pregunta in preguntas:
+            self.assertTrue(pregunta['pregunta'])
+
+    def test_evaluar_respuesta_vacia(self):
+        resultado = ee.evaluar_respuesta('', '')
+        self.assertEqual(resultado['puntuacion'], 0)
+        self.assertEqual(resultado['estado_longitud'], 'vacia')
+
+    def test_evaluar_respuesta_corta(self):
+        resultado = ee.evaluar_respuesta('Trabajo bien en equipo.', '')
+        self.assertEqual(resultado['estado_longitud'], 'corta')
+        self.assertLess(resultado['puntuacion'], 50)
+
+    def test_evaluar_respuesta_larga(self):
+        resultado = ee.evaluar_respuesta('palabra ' * 300, '')
+        self.assertEqual(resultado['estado_longitud'], 'larga')
+
+    def test_evaluar_respuesta_adecuada_con_vocabulario(self):
+        resultado = ee.evaluar_respuesta(self.RESPUESTA_ADECUADA, '')
+        self.assertEqual(resultado['estado_longitud'], 'adecuada')
+        self.assertGreaterEqual(len(resultado['vocabulario_profesional']), 3)
+        self.assertGreaterEqual(resultado['puntuacion'], 70)
+
+    def test_evaluar_respuesta_puntuacion_siempre_entre_0_y_100(self):
+        for respuesta in ('', 'a', 'palabra ' * 400, self.RESPUESTA_ADECUADA):
+            resultado = ee.evaluar_respuesta(respuesta, '')
+            self.assertGreaterEqual(resultado['puntuacion'], 0)
+            self.assertLessEqual(resultado['puntuacion'], 100)
+
+    def test_evaluar_entrevista_resultado_determinista(self):
+        respuestas = [
+            ee.RespuestaEntrevista(tipo='presentacion', pregunta='p1', respuesta=self.RESPUESTA_ADECUADA, orden=1),
+            ee.RespuestaEntrevista(tipo='experiencia', pregunta='p2', respuesta='', orden=2),
+        ]
+        contexto = ee.ContextoEntrevista(perfil_habilidades='Python, Django')
+
+        resultado1 = ee.evaluar_entrevista(respuestas, contexto)
+        resultado2 = ee.evaluar_entrevista(respuestas, contexto)
+
+        self.assertEqual(resultado1, resultado2)
+
+    def test_evaluar_entrevista_puntuacion_y_clasificacion_validas(self):
+        respuestas = [
+            ee.RespuestaEntrevista(tipo=tipo, pregunta='pregunta', respuesta=self.RESPUESTA_ADECUADA, orden=i)
+            for i, tipo in enumerate(ee.TIPOS_PREGUNTA_ORDEN, start=1)
+        ]
+        resultado = ee.evaluar_entrevista(respuestas, ee.ContextoEntrevista())
+
+        self.assertGreaterEqual(resultado['puntuacion'], 0)
+        self.assertLessEqual(resultado['puntuacion'], 100)
+        self.assertIn(resultado['clasificacion'], [
+            'Excelente', 'Muy buena', 'Buena', 'Mejorable', 'Insuficiente'
+        ])
+
+    def test_evaluar_entrevista_respuestas_vacias_genera_recomendaciones(self):
+        respuestas = [
+            ee.RespuestaEntrevista(tipo='presentacion', pregunta='p', respuesta='', orden=1),
+        ]
+        resultado = ee.evaluar_entrevista(respuestas, ee.ContextoEntrevista())
+
+        self.assertGreater(len(resultado['aspectos_mejora']), 0)
+        self.assertGreater(len(resultado['recomendaciones']), 0)
+
+    def test_coherencia_con_perfil_profesional(self):
+        respuestas = [ee.RespuestaEntrevista(
+            tipo='habilidades', pregunta='p',
+            respuesta='Tengo experiencia con Python y Django en proyectos reales.', orden=1,
+        )]
+        contexto = ee.ContextoEntrevista(perfil_habilidades='Python, Django')
+        resultado = ee.evaluar_entrevista(respuestas, contexto)
+        self.assertTrue(any('Perfil Profesional' in f for f in resultado['fortalezas']))
+
+    def test_coherencia_con_cv(self):
+        respuestas = [ee.RespuestaEntrevista(
+            tipo='habilidades', pregunta='p',
+            respuesta='Trabajo con React y TypeScript habitualmente en mi día a día.', orden=1,
+        )]
+        contexto = ee.ContextoEntrevista(texto_cv='Desarrollador con experiencia en React y TypeScript')
+        resultado = ee.evaluar_entrevista(respuestas, contexto)
+        self.assertTrue(any('CV analizado' in f for f in resultado['fortalezas']))
+
+    def test_coherencia_con_oferta(self):
+        respuestas = [ee.RespuestaEntrevista(
+            tipo='motivacion', pregunta='p',
+            respuesta='Me interesa mucho el puesto de Backend Developer en esta empresa.', orden=1,
+        )]
+        contexto = ee.ContextoEntrevista(oferta_titulo='Backend Developer', oferta_empresa='TechCorp')
+        resultado = ee.evaluar_entrevista(respuestas, contexto)
+        self.assertTrue(any('oferta de empleo' in f for f in resultado['fortalezas']))
+
+    def test_coherencia_con_linkedin(self):
+        respuestas = [ee.RespuestaEntrevista(
+            tipo='objetivos', pregunta='p',
+            respuesta='Mi objetivo es seguir creciendo como desarrollador full stack.', orden=1,
+        )]
+        contexto = ee.ContextoEntrevista(linkedin_titular='Desarrollador Full Stack')
+        resultado = ee.evaluar_entrevista(respuestas, contexto)
+        self.assertTrue(any('LinkedIn' in f for f in resultado['fortalezas']))
+
+    def test_coherencia_sin_fuentes_no_penaliza(self):
+        respuestas = [ee.RespuestaEntrevista(
+            tipo='presentacion', pregunta='p', respuesta=self.RESPUESTA_ADECUADA, orden=1,
+        )]
+        resultado = ee.evaluar_entrevista(respuestas, ee.ContextoEntrevista())
+        # Sin Perfil, CV, Oferta ni LinkedIn con contenido, no debe generarse
+        # ninguna recomendación de coherencia (crédito íntegro, no penaliza).
+        self.assertFalse(any('coherentes con' in r or 'relacionar tus respuestas' in r
+                              for r in resultado['recomendaciones']))
+
+
+class SimulacionEntrevistaTests(TestCase):
+    def setUp(self):
+        self.user_a = User.objects.create_user(username='juan', password='clave12345')
+        Perfil.objects.create(usuario=self.user_a, rol='usuario')
+        self.token_a = Token.objects.create(user=self.user_a)
+
+        self.user_b = User.objects.create_user(username='maria', password='clave12345')
+        Perfil.objects.create(usuario=self.user_b, rol='usuario')
+        self.token_b = Token.objects.create(user=self.user_b)
+
+    def auth_headers(self, token):
+        return {'HTTP_AUTHORIZATION': f'Token {token.key}'}
+
+    def respuestas_validas(self):
+        return {
+            'respuestas': [
+                {
+                    'tipo': tipo,
+                    'pregunta': f'Pregunta sobre {tipo}',
+                    'respuesta': (
+                        'Esta es una respuesta de ejemplo con contenido suficiente, '
+                        'mostrando responsabilidad, compromiso y trabajo en equipo.'
+                    ),
+                    'orden': i,
+                }
+                for i, tipo in enumerate(ee.TIPOS_PREGUNTA_ORDEN, start=1)
+            ]
+        }
+
+    def test_acceso_sin_token_es_rechazado(self):
+        self.assertEqual(self.client.post('/api/usuarios/entrevista/iniciar/').status_code, 401)
+        self.assertEqual(
+            self.client.post(
+                '/api/usuarios/entrevista/finalizar/', {}, content_type='application/json'
+            ).status_code,
+            401,
+        )
+        self.assertEqual(self.client.get('/api/usuarios/entrevista/historial/').status_code, 401)
+
+    def test_iniciar_entrevista_genera_diez_preguntas(self):
+        respuesta = self.client.post(
+            '/api/usuarios/entrevista/iniciar/', **self.auth_headers(self.token_a)
+        )
+        self.assertEqual(respuesta.status_code, 200)
+        preguntas = respuesta.json()['preguntas']
+        self.assertEqual(len(preguntas), 10)
+        for pregunta in preguntas:
+            self.assertIn('tipo', pregunta)
+            self.assertIn('pregunta', pregunta)
+            self.assertIn('orden', pregunta)
+
+    def test_finalizar_entrevista_requiere_respuestas(self):
+        respuesta = self.client.post(
+            '/api/usuarios/entrevista/finalizar/',
+            {'respuestas': []},
+            content_type='application/json',
+            **self.auth_headers(self.token_a),
+        )
+        self.assertEqual(respuesta.status_code, 400)
+
+    def test_finalizar_entrevista_crea_y_persiste(self):
+        respuesta = self.client.post(
+            '/api/usuarios/entrevista/finalizar/',
+            self.respuestas_validas(),
+            content_type='application/json',
+            **self.auth_headers(self.token_a),
+        )
+
+        self.assertEqual(respuesta.status_code, 201)
+        datos = respuesta.json()
+        self.assertGreaterEqual(datos['puntuacion'], 0)
+        self.assertLessEqual(datos['puntuacion'], 100)
+        self.assertEqual(len(datos['preguntas']), 10)
+        self.assertTrue(SimulacionEntrevista.objects.filter(usuario=self.user_a).exists())
+        self.assertEqual(
+            PreguntaRespuesta.objects.filter(simulacion__usuario=self.user_a).count(), 10
+        )
+
+    def test_usuario_sin_perfil_no_falla(self):
+        # PerfilProfesional se crea automáticamente vacío (get_or_create)
+        respuesta = self.client.post(
+            '/api/usuarios/entrevista/finalizar/',
+            self.respuestas_validas(),
+            content_type='application/json',
+            **self.auth_headers(self.token_a),
+        )
+        self.assertEqual(respuesta.status_code, 201)
+
+    def test_usuario_sin_cv_no_falla(self):
+        # No se ha subido ningún Curriculum para este usuario
+        respuesta = self.client.post(
+            '/api/usuarios/entrevista/finalizar/',
+            self.respuestas_validas(),
+            content_type='application/json',
+            **self.auth_headers(self.token_a),
+        )
+        self.assertEqual(respuesta.status_code, 201)
+
+    def test_usuario_sin_oferta_no_falla(self):
+        # No se ha comparado ninguna Oferta para este usuario
+        respuesta = self.client.post(
+            '/api/usuarios/entrevista/finalizar/',
+            self.respuestas_validas(),
+            content_type='application/json',
+            **self.auth_headers(self.token_a),
+        )
+        self.assertEqual(respuesta.status_code, 201)
+
+    def test_usuario_sin_linkedin_no_falla(self):
+        # No existe ninguna OptimizacionLinkedIn para este usuario
+        respuesta = self.client.post(
+            '/api/usuarios/entrevista/finalizar/',
+            self.respuestas_validas(),
+            content_type='application/json',
+            **self.auth_headers(self.token_a),
+        )
+        self.assertEqual(respuesta.status_code, 201)
+
+    def test_usuario_no_puede_indicar_propietario(self):
+        payload = self.respuestas_validas()
+        payload['usuario'] = self.user_b.id
+
+        respuesta = self.client.post(
+            '/api/usuarios/entrevista/finalizar/',
+            payload,
+            content_type='application/json',
+            **self.auth_headers(self.token_a),
+        )
+
+        self.assertEqual(respuesta.status_code, 201)
+        simulacion = SimulacionEntrevista.objects.get(id=respuesta.json()['id'])
+        self.assertEqual(simulacion.usuario, self.user_a)
+
+    def test_historial_ordenado_por_fecha_descendente(self):
+        for _ in range(3):
+            self.client.post(
+                '/api/usuarios/entrevista/finalizar/',
+                self.respuestas_validas(),
+                content_type='application/json',
+                **self.auth_headers(self.token_a),
+            )
+
+        historial = self.client.get(
+            '/api/usuarios/entrevista/historial/', **self.auth_headers(self.token_a)
+        ).json()
+
+        ids = [item['id'] for item in historial]
+        self.assertEqual(len(ids), 3)
+        self.assertEqual(ids, sorted(ids, reverse=True))
+
+    def test_aislamiento_entre_usuarios(self):
+        self.client.post(
+            '/api/usuarios/entrevista/finalizar/',
+            self.respuestas_validas(),
+            content_type='application/json',
+            **self.auth_headers(self.token_a),
+        )
+
+        historial_b = self.client.get(
+            '/api/usuarios/entrevista/historial/', **self.auth_headers(self.token_b)
+        )
+        self.assertEqual(historial_b.json(), [])
+
+
+# -----------------------------
+# Sprint 9 — Integración con OpenAI
+# -----------------------------
+
+def _respuesta_openai(contenido):
+    """Imita la forma de una respuesta de la API de OpenAI: un objeto con
+    .choices[0].message.content igual al texto indicado."""
+    mensaje = MagicMock()
+    mensaje.content = contenido
+    choice = MagicMock()
+    choice.message = mensaje
+    respuesta = MagicMock()
+    respuesta.choices = [choice]
+    return respuesta
+
+
+def _cliente_mock(create_side_effect=None, create_return_value=None):
+    """Cliente OpenAI simulado: nunca realiza ninguna llamada de red real."""
+    cliente = MagicMock()
+    if create_side_effect is not None:
+        cliente.chat.completions.create.side_effect = create_side_effect
+    else:
+        cliente.chat.completions.create.return_value = create_return_value
+    return cliente
+
+
+class OpenAIServiceTests(SimpleTestCase):
+    """
+    Tests del servicio centralizado openai_service.py: disponibilidad de la
+    clave, manejo de todos los errores exigidos por el checklist del
+    Sprint 9 y validación estricta de la forma de la respuesta. El cliente
+    real de OpenAI se sustituye siempre por un mock: estos tests no
+    realizan ninguna llamada de red.
+    """
+
+    def setUp(self):
+        self.perfil = PerfilProfesional(
+            nombre_completo='Ana Pérez',
+            telefono='600111222',
+            ciudad='Madrid',
+            estudios='Grado en Ingeniería Informática',
+            experiencia='3 años como desarrolladora backend en Django.',
+            habilidades='Python, Django, SQL',
+        )
+        self.resultado_reglas_perfil = analizar_perfil(self.perfil)
+        self.resultado_reglas_perfil['puntuacion_completitud'] = calcular_puntuacion(self.perfil)
+
+    # --- disponibilidad ---
+
+    def test_no_disponible_sin_clave(self):
+        with patch.dict('os.environ', {'OPENAI_API_KEY': ''}, clear=False):
+            self.assertFalse(openai_service.openai_disponible())
+
+    def test_disponible_con_clave(self):
+        with patch.dict('os.environ', {'OPENAI_API_KEY': 'sk-test'}, clear=False):
+            self.assertTrue(openai_service.openai_disponible())
+
+    def test_analizar_perfil_clave_ausente_devuelve_none(self):
+        with patch.dict('os.environ', {'OPENAI_API_KEY': ''}, clear=False):
+            resultado = openai_service.analizar_perfil(self.perfil, self.resultado_reglas_perfil)
+        self.assertIsNone(resultado)
+
+    # --- respuestas válidas / inválidas ---
+
+    def test_analizar_perfil_respuesta_valida(self):
+        contenido = json.dumps({
+            "resumen": "Resumen generado por IA.",
+            "fortalezas": ["Fortaleza IA 1"],
+            "aspectos_mejora": ["Aspecto IA 1"],
+            "recomendaciones": ["Recomendación IA 1"],
+        })
+        cliente = _cliente_mock(create_return_value=_respuesta_openai(contenido))
+
+        with patch.dict('os.environ', {'OPENAI_API_KEY': 'sk-test'}, clear=False), \
+                patch.object(openai_service, '_cliente', return_value=cliente):
+            resultado = openai_service.analizar_perfil(self.perfil, self.resultado_reglas_perfil)
+
+        self.assertEqual(resultado, {
+            "resumen": "Resumen generado por IA.",
+            "fortalezas": ["Fortaleza IA 1"],
+            "aspectos_mejora": ["Aspecto IA 1"],
+            "recomendaciones": ["Recomendación IA 1"],
+        })
+
+    def test_respuesta_json_invalido(self):
+        cliente = _cliente_mock(create_return_value=_respuesta_openai("esto no es json"))
+        with patch.dict('os.environ', {'OPENAI_API_KEY': 'sk-test'}, clear=False), \
+                patch.object(openai_service, '_cliente', return_value=cliente):
+            resultado = openai_service.analizar_perfil(self.perfil, self.resultado_reglas_perfil)
+        self.assertIsNone(resultado)
+
+    def test_respuesta_sin_claves_esperadas(self):
+        contenido = json.dumps({"resumen": "Solo resumen, faltan las demás claves."})
+        cliente = _cliente_mock(create_return_value=_respuesta_openai(contenido))
+        with patch.dict('os.environ', {'OPENAI_API_KEY': 'sk-test'}, clear=False), \
+                patch.object(openai_service, '_cliente', return_value=cliente):
+            resultado = openai_service.analizar_perfil(self.perfil, self.resultado_reglas_perfil)
+        self.assertIsNone(resultado)
+
+    def test_respuesta_con_tipos_incorrectos(self):
+        contenido = json.dumps({
+            "resumen": "Resumen válido.",
+            "fortalezas": "no es una lista, es un string",
+            "aspectos_mejora": [],
+            "recomendaciones": [],
+        })
+        cliente = _cliente_mock(create_return_value=_respuesta_openai(contenido))
+        with patch.dict('os.environ', {'OPENAI_API_KEY': 'sk-test'}, clear=False), \
+                patch.object(openai_service, '_cliente', return_value=cliente):
+            resultado = openai_service.analizar_perfil(self.perfil, self.resultado_reglas_perfil)
+        self.assertIsNone(resultado)
+
+    # --- manejo de errores del SDK ---
+
+    def test_error_autenticacion(self):
+        request = httpx.Request("POST", "https://api.openai.com/v1/chat/completions")
+        response = httpx.Response(401, request=request)
+        error = openai.AuthenticationError("Invalid API key", response=response, body=None)
+        cliente = _cliente_mock(create_side_effect=error)
+        with patch.dict('os.environ', {'OPENAI_API_KEY': 'sk-test'}, clear=False), \
+                patch.object(openai_service, '_cliente', return_value=cliente):
+            resultado = openai_service.analizar_perfil(self.perfil, self.resultado_reglas_perfil)
+        self.assertIsNone(resultado)
+
+    def test_error_limite_uso(self):
+        request = httpx.Request("POST", "https://api.openai.com/v1/chat/completions")
+        response = httpx.Response(429, request=request)
+        error = openai.RateLimitError("Rate limit exceeded", response=response, body=None)
+        cliente = _cliente_mock(create_side_effect=error)
+        with patch.dict('os.environ', {'OPENAI_API_KEY': 'sk-test'}, clear=False), \
+                patch.object(openai_service, '_cliente', return_value=cliente):
+            resultado = openai_service.analizar_perfil(self.perfil, self.resultado_reglas_perfil)
+        self.assertIsNone(resultado)
+
+    def test_error_conexion(self):
+        request = httpx.Request("POST", "https://api.openai.com/v1/chat/completions")
+        error = openai.APIConnectionError(request=request)
+        cliente = _cliente_mock(create_side_effect=error)
+        with patch.dict('os.environ', {'OPENAI_API_KEY': 'sk-test'}, clear=False), \
+                patch.object(openai_service, '_cliente', return_value=cliente):
+            resultado = openai_service.analizar_perfil(self.perfil, self.resultado_reglas_perfil)
+        self.assertIsNone(resultado)
+
+    def test_error_timeout(self):
+        request = httpx.Request("POST", "https://api.openai.com/v1/chat/completions")
+        error = openai.APITimeoutError(request=request)
+        cliente = _cliente_mock(create_side_effect=error)
+        with patch.dict('os.environ', {'OPENAI_API_KEY': 'sk-test'}, clear=False), \
+                patch.object(openai_service, '_cliente', return_value=cliente):
+            resultado = openai_service.analizar_perfil(self.perfil, self.resultado_reglas_perfil)
+        self.assertIsNone(resultado)
+
+    def test_error_inesperado_no_se_propaga(self):
+        cliente = _cliente_mock(create_side_effect=RuntimeError("fallo inesperado del SDK"))
+        with patch.dict('os.environ', {'OPENAI_API_KEY': 'sk-test'}, clear=False), \
+                patch.object(openai_service, '_cliente', return_value=cliente):
+            # No debe lanzar ninguna excepción: se captura y se devuelve None.
+            resultado = openai_service.analizar_perfil(self.perfil, self.resultado_reglas_perfil)
+        self.assertIsNone(resultado)
+
+    # --- otros dominios y casos límite ---
+
+    def test_comparar_oferta_devuelve_solo_recomendaciones(self):
+        oferta = DatosOferta(habilidades='Python, Django', descripcion='Backend con Django')
+        candidato = DatosCandidato(habilidades='Python', experiencia='2 años', estudios='FP DAM')
+        resultado_reglas = comparar_oferta(oferta, candidato)
+
+        contenido = json.dumps({"recomendaciones": ["Aprende Django en profundidad."]})
+        cliente = _cliente_mock(create_return_value=_respuesta_openai(contenido))
+
+        with patch.dict('os.environ', {'OPENAI_API_KEY': 'sk-test'}, clear=False), \
+                patch.object(openai_service, '_cliente', return_value=cliente):
+            resultado = openai_service.comparar_oferta(oferta, candidato, resultado_reglas)
+
+        self.assertEqual(resultado, {"recomendaciones": ["Aprende Django en profundidad."]})
+
+    def test_analizar_cv_sin_texto_no_intenta_llamar_a_la_api(self):
+        with patch.dict('os.environ', {'OPENAI_API_KEY': 'sk-test'}, clear=False), \
+                patch.object(openai_service, '_cliente') as cliente_constructor:
+            resultado = openai_service.analizar_cv('', {'puntuacion': 0})
+
+        self.assertIsNone(resultado)
+        cliente_constructor.assert_not_called()
+
+
+class MotorIAWrapperTests(SimpleTestCase):
+    """
+    Tests de los 5 puntos de entrada exigidos por el checklist
+    (analizar_perfil_ia, analizar_cv_ia, comparar_oferta_ia,
+    optimizar_linkedin_ia, evaluar_entrevista_ia): deben limitarse a
+    decidir entre IA y reglas sin romper la forma del resultado que
+    consumen las vistas, y deben caer siempre en el motor de reglas si la
+    IA no está disponible o falla (openai_service devuelve None).
+    """
+
+    def test_analizar_perfil_ia_fallback_cuando_ia_no_disponible(self):
+        perfil = PerfilProfesional(
+            nombre_completo='Luis', experiencia='', estudios='', habilidades='',
+            telefono='', ciudad='',
+        )
+        with patch.object(openai_service, 'analizar_perfil', return_value=None) as mock_ia:
+            resultado = analizar_perfil_ia(perfil)
+
+        esperado = analizar_perfil(perfil)
+        esperado['puntuacion_completitud'] = calcular_puntuacion(perfil)
+        self.assertEqual(resultado, esperado)
+        mock_ia.assert_called_once()
+
+    def test_analizar_perfil_ia_usa_resultado_de_ia_cuando_esta_disponible(self):
+        perfil = PerfilProfesional(
+            nombre_completo='Luis', experiencia='Backend', estudios='FP',
+            habilidades='Python', telefono='600111222', ciudad='Madrid',
+        )
+        resultado_ia = {
+            "resumen": "Resumen IA.",
+            "fortalezas": ["F-IA"],
+            "aspectos_mejora": ["A-IA"],
+            "recomendaciones": ["R-IA"],
+        }
+        with patch.object(openai_service, 'analizar_perfil', return_value=resultado_ia):
+            resultado = analizar_perfil_ia(perfil)
+
+        self.assertEqual(resultado['resumen'], "Resumen IA.")
+        self.assertEqual(resultado['fortalezas'], ["F-IA"])
+        # La puntuación de completitud siempre es la calculada por reglas.
+        self.assertEqual(resultado['puntuacion_completitud'], calcular_puntuacion(perfil))
+
+    def test_analizar_cv_ia_fallback(self):
+        texto = "Experiencia laboral: 5 años. Formación académica: Grado. Habilidades: Python."
+        with patch.object(openai_service, 'analizar_cv', return_value=None):
+            resultado = analizar_cv_ia(texto)
+        self.assertEqual(resultado, analizar_cv(texto))
+
+    def test_analizar_cv_ia_usa_resultado_de_ia(self):
+        texto = "Experiencia laboral: 5 años. Formación académica: Grado. Habilidades: Python."
+        resultado_ia = {"resumen": "R-IA", "fortalezas": [], "debilidades": [], "recomendaciones": []}
+        with patch.object(openai_service, 'analizar_cv', return_value=resultado_ia):
+            resultado = analizar_cv_ia(texto)
+        self.assertEqual(resultado['resumen'], "R-IA")
+        # La puntuación objetiva del CV siempre es la calculada por reglas.
+        self.assertEqual(resultado['puntuacion'], analizar_cv(texto)['puntuacion'])
+
+    def test_comparar_oferta_ia_fallback(self):
+        oferta = DatosOferta(habilidades='Python', descripcion='desc')
+        candidato = DatosCandidato(habilidades='Python', experiencia='2 años', estudios='FP')
+        with patch.object(openai_service, 'comparar_oferta', return_value=None):
+            resultado = comparar_oferta_ia(oferta, candidato)
+        self.assertEqual(resultado, comparar_oferta(oferta, candidato))
+
+    def test_comparar_oferta_ia_usa_ia_solo_para_recomendaciones(self):
+        oferta = DatosOferta(habilidades='Python', descripcion='desc')
+        candidato = DatosCandidato(habilidades='Python', experiencia='2 años', estudios='FP')
+        base = comparar_oferta(oferta, candidato)
+
+        with patch.object(openai_service, 'comparar_oferta', return_value={"recomendaciones": ["R-IA"]}):
+            resultado = comparar_oferta_ia(oferta, candidato)
+
+        self.assertEqual(resultado['recomendaciones'], ["R-IA"])
+        # Los datos objetivos (match, habilidades) nunca los decide la IA.
+        self.assertEqual(resultado['porcentaje_match'], base['porcentaje_match'])
+        self.assertEqual(resultado['habilidades_coincidentes'], base['habilidades_coincidentes'])
+        self.assertEqual(resultado['clasificacion'], base['clasificacion'])
+
+    def test_optimizar_linkedin_ia_fallback(self):
+        datos = li.DatosLinkedIn(titular_actual='Dev', extracto='texto largo ' * 20, habilidades='Python')
+        contexto = li.DatosContexto()
+        with patch.object(openai_service, 'optimizar_linkedin', return_value=None):
+            resultado = li.optimizar_linkedin_ia(datos, contexto)
+        self.assertEqual(resultado, li.optimizar_linkedin(datos, contexto))
+
+    def test_optimizar_linkedin_ia_usa_resultado_de_ia(self):
+        datos = li.DatosLinkedIn(titular_actual='Dev', extracto='texto largo ' * 20, habilidades='Python')
+        contexto = li.DatosContexto()
+        base = li.optimizar_linkedin(datos, contexto)
+        resultado_ia = {
+            "titular_optimizado": "Backend Developer | Python",
+            "fortalezas": ["F-IA"],
+            "debilidades": ["D-IA"],
+            "plan_mejora": ["P-IA"],
+        }
+        with patch.object(openai_service, 'optimizar_linkedin', return_value=resultado_ia):
+            resultado = li.optimizar_linkedin_ia(datos, contexto)
+
+        self.assertEqual(resultado['titular_optimizado'], "Backend Developer | Python")
+        # La puntuación/clasificación objetivas nunca las decide la IA.
+        self.assertEqual(resultado['puntuacion'], base['puntuacion'])
+        self.assertEqual(resultado['clasificacion'], base['clasificacion'])
+
+    def test_evaluar_entrevista_ia_fallback(self):
+        contexto = ee.ContextoEntrevista()
+        respuestas = [ee.RespuestaEntrevista(tipo='presentacion', pregunta='¿?', respuesta='Hola, soy Ana.', orden=1)]
+        with patch.object(openai_service, 'evaluar_entrevista', return_value=None):
+            resultado = ee.evaluar_entrevista_ia(respuestas, contexto)
+        self.assertEqual(resultado, ee.evaluar_entrevista(respuestas, contexto))
+
+    def test_evaluar_entrevista_ia_usa_resultado_de_ia(self):
+        contexto = ee.ContextoEntrevista()
+        respuestas = [ee.RespuestaEntrevista(tipo='presentacion', pregunta='¿?', respuesta='Hola, soy Ana.', orden=1)]
+        base = ee.evaluar_entrevista(respuestas, contexto)
+        resultado_ia = {"fortalezas": ["F-IA"], "aspectos_mejora": ["A-IA"], "recomendaciones": ["R-IA"]}
+        with patch.object(openai_service, 'evaluar_entrevista', return_value=resultado_ia):
+            resultado = ee.evaluar_entrevista_ia(respuestas, contexto)
+
+        self.assertEqual(resultado['fortalezas'], ["F-IA"])
+        # La puntuación/clasificación de la entrevista siempre son las
+        # calculadas por reglas (deterministas y auditables).
+        self.assertEqual(resultado['puntuacion'], base['puntuacion'])
+        self.assertEqual(resultado['clasificacion'], base['clasificacion'])
