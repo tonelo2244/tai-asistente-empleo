@@ -11,13 +11,21 @@ import {
   CheckCircle2,
   XCircle,
   Home,
+  Search,
+  ExternalLink,
 } from 'lucide-react'
 import { useAuth } from '../context/AuthContext'
 import {
   crearOferta,
   obtenerHistorialOfertas,
+  generarBusquedaEmpleo,
 } from '../services/api'
-import type { DatosOferta, Oferta } from '../services/api'
+import type {
+  DatosOferta,
+  Oferta,
+  DatosBusquedaEmpleo,
+  ResultadoBusquedaEmpleo,
+} from '../services/api'
 import Spinner from '../components/Spinner'
 import Alert from '../components/Alert'
 
@@ -32,6 +40,12 @@ const FORM_INICIAL: DatosOferta = {
   experiencia_requerida: '',
 }
 
+const BUSQUEDA_FORM_INICIAL: DatosBusquedaEmpleo = {
+  puesto_objetivo: '',
+  ubicacion: '',
+  modalidad: 'cualquiera',
+}
+
 function CompararOfertaPage() {
   const { token } = useAuth()
   const navigate = useNavigate()
@@ -43,6 +57,12 @@ function CompararOfertaPage() {
   const [cargandoHistorial, setCargandoHistorial] = useState(false)
   const [mostrarHistorial, setMostrarHistorial] = useState(false)
   const [error, setError] = useState('')
+
+  // Búsqueda optimizada de ofertas en LinkedIn — estado independiente del comparador de arriba
+  const [busquedaForm, setBusquedaForm] = useState<DatosBusquedaEmpleo>(BUSQUEDA_FORM_INICIAL)
+  const [busquedaResultado, setBusquedaResultado] = useState<ResultadoBusquedaEmpleo | null>(null)
+  const [buscandoEmpleo, setBuscandoEmpleo] = useState(false)
+  const [errorBusqueda, setErrorBusqueda] = useState('')
 
   useEffect(() => {
     if (!token) {
@@ -88,6 +108,29 @@ function CompararOfertaPage() {
       setError(err.message)
     } finally {
       setCargandoHistorial(false)
+    }
+  }
+
+  function handleChangeBusqueda(e: React.ChangeEvent<HTMLInputElement | HTMLSelectElement>) {
+    const { name, value } = e.target
+    setBusquedaForm(prev => ({ ...prev, [name]: value }))
+  }
+
+  async function handleSubmitBusqueda(e: React.FormEvent) {
+    e.preventDefault()
+    if (!token) return
+
+    setBuscandoEmpleo(true)
+    setErrorBusqueda('')
+
+    try {
+      const resultado = await generarBusquedaEmpleo(token, busquedaForm)
+      setBusquedaResultado(resultado)
+    } catch (err: any) {
+      setErrorBusqueda(err.message)
+      setBusquedaResultado(null)
+    } finally {
+      setBuscandoEmpleo(false)
     }
   }
 
@@ -426,6 +469,121 @@ function CompararOfertaPage() {
             </div>
           </div>
         )}
+
+        {/* Sección independiente del comparador de arriba: genera una URL oficial
+            de búsqueda de LinkedIn Jobs a partir del perfil y el CV, sin usar la
+            API de LinkedIn ni hacer scraping. */}
+        <div
+          style={{
+            marginTop: '32px',
+            paddingTop: '32px',
+            borderTop: '1px solid #e5e7eb',
+          }}
+        >
+          <div className="analysis-header">
+            <h2 style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+              <Search size={20} /> Buscar ofertas para mi perfil
+            </h2>
+            <p className="text-muted">
+              Genera una búsqueda optimizada en LinkedIn Jobs a partir de tu perfil profesional y tu último CV analizado
+            </p>
+          </div>
+
+          <form onSubmit={handleSubmitBusqueda} className="profile-form" style={{ marginBottom: '32px' }}>
+            <div className="form-field">
+              <label htmlFor="busqueda_ubicacion">Ubicación</label>
+              <input
+                id="busqueda_ubicacion"
+                type="text"
+                name="ubicacion"
+                placeholder="Ej: Alicante"
+                value={busquedaForm.ubicacion}
+                onChange={handleChangeBusqueda}
+                disabled={buscandoEmpleo}
+              />
+            </div>
+
+            <div className="form-field">
+              <label htmlFor="busqueda_modalidad">Modalidad</label>
+              <select
+                id="busqueda_modalidad"
+                name="modalidad"
+                value={busquedaForm.modalidad}
+                onChange={handleChangeBusqueda}
+                disabled={buscandoEmpleo}
+              >
+                <option value="cualquiera">Cualquiera</option>
+                <option value="presencial">Presencial</option>
+                <option value="hibrido">Híbrido</option>
+                <option value="remoto">Remoto</option>
+              </select>
+            </div>
+
+            <div className="form-field">
+              <label htmlFor="busqueda_puesto_objetivo">Puesto objetivo (opcional)</label>
+              <input
+                id="busqueda_puesto_objetivo"
+                type="text"
+                name="puesto_objetivo"
+                placeholder="Ej: Desarrollador Backend"
+                value={busquedaForm.puesto_objetivo}
+                onChange={handleChangeBusqueda}
+                disabled={buscandoEmpleo}
+              />
+            </div>
+
+            {errorBusqueda && <Alert type="error">{errorBusqueda}</Alert>}
+
+            <div className="profile-actions">
+              <button type="submit" disabled={buscandoEmpleo} className="btn-primary">
+                {buscandoEmpleo ? <Spinner size={14} variant="light" /> : <Search size={16} />}
+                {buscandoEmpleo ? 'Generando búsqueda...' : 'Generar búsqueda'}
+              </button>
+            </div>
+          </form>
+
+          {busquedaResultado && (
+            <div className="analysis-result">
+              <div className="analysis-section">
+                <h3>
+                  <Briefcase size={18} /> {busquedaResultado.puesto_sugerido}
+                </h3>
+                <p className="text-muted" style={{ margin: '0 0 12px 0' }}>
+                  {busquedaResultado.nivel_sugerido && `Nivel: ${busquedaResultado.nivel_sugerido} · `}
+                  Modalidad: {busquedaResultado.modalidad}
+                  {busquedaResultado.ubicacion && ` · ${busquedaResultado.ubicacion}`}
+                </p>
+
+                {busquedaResultado.tecnologias_prioritarias.length > 0 && (
+                  <ul>
+                    {busquedaResultado.tecnologias_prioritarias.map((item, i) => (
+                      <li key={i}>{item}</li>
+                    ))}
+                  </ul>
+                )}
+
+                <p className="text-muted" style={{ fontSize: '12px', margin: '12px 0 0 0' }}>
+                  Consulta generada: {busquedaResultado.consulta}
+                </p>
+              </div>
+
+              <div className="profile-actions">
+                <a
+                  href={busquedaResultado.linkedin_url}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="btn-primary"
+                  aria-disabled={!busquedaResultado.linkedin_url}
+                  onClick={e => {
+                    if (!busquedaResultado.linkedin_url) e.preventDefault()
+                  }}
+                >
+                  <ExternalLink size={16} /> Buscar en LinkedIn
+                </a>
+              </div>
+            </div>
+          )}
+        </div>
 
         <div
           style={{

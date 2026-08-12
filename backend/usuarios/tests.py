@@ -3,6 +3,7 @@ import json
 import shutil
 import tempfile
 from unittest.mock import MagicMock, patch
+from urllib.parse import parse_qs, urlparse
 
 import httpx
 import openai
@@ -14,6 +15,7 @@ from pypdf.generic import DecodedStreamObject, DictionaryObject, NameObject
 from rest_framework.authtoken.models import Token
 
 from . import evaluador_entrevista as ee
+from . import generador_busqueda_empleo as gbe
 from . import openai_service
 from . import optimizador_linkedin as li
 from .comparador import (
@@ -1812,3 +1814,282 @@ class MotorIAWrapperTests(SimpleTestCase):
         # calculadas por reglas (deterministas y auditables).
         self.assertEqual(resultado['puntuacion'], base['puntuacion'])
         self.assertEqual(resultado['clasificacion'], base['clasificacion'])
+
+
+# -----------------------------
+# Sprint 11 — Búsqueda inteligente de ofertas en LinkedIn
+# -----------------------------
+
+class GeneradorBusquedaEmpleoTests(SimpleTestCase):
+    """
+    Tests unitarios del motor de reglas (generador_busqueda_empleo.py):
+    puro Python, sin BD. No se usa la API de LinkedIn ni se hace scraping
+    en ningún test: solo se comprueba la URL de búsqueda generada como texto.
+    """
+
+    def test_genera_puesto_frontend(self):
+        contexto = gbe.ContextoBusqueda(perfil_habilidades='React, TypeScript, HTML, CSS')
+        resultado = gbe.generar_busqueda_empleo(gbe.DatosBusqueda(), contexto)
+        self.assertEqual(resultado['puesto_sugerido'], 'Desarrollador/a Frontend')
+
+    def test_genera_puesto_backend(self):
+        contexto = gbe.ContextoBusqueda(perfil_habilidades='Python, Django')
+        resultado = gbe.generar_busqueda_empleo(gbe.DatosBusqueda(), contexto)
+        self.assertEqual(resultado['puesto_sugerido'], 'Desarrollador/a Backend')
+
+    def test_genera_puesto_full_stack_con_backend_y_frontend(self):
+        contexto = gbe.ContextoBusqueda(perfil_habilidades='Python, Django, React, TypeScript')
+        resultado = gbe.generar_busqueda_empleo(gbe.DatosBusqueda(), contexto)
+        self.assertEqual(resultado['puesto_sugerido'], 'Desarrollador/a Full Stack')
+
+    def test_genera_puesto_datos(self):
+        contexto = gbe.ContextoBusqueda(perfil_habilidades='SQL, PostgreSQL')
+        resultado = gbe.generar_busqueda_empleo(gbe.DatosBusqueda(), contexto)
+        self.assertEqual(resultado['puesto_sugerido'], 'Desarrollador/a de Datos')
+
+    def test_genera_puesto_devops(self):
+        contexto = gbe.ContextoBusqueda(perfil_habilidades='Docker, Git')
+        resultado = gbe.generar_busqueda_empleo(gbe.DatosBusqueda(), contexto)
+        self.assertEqual(resultado['puesto_sugerido'], 'DevOps')
+
+    def test_genera_puesto_generico_sin_tecnologias_detectadas(self):
+        resultado = gbe.generar_busqueda_empleo(gbe.DatosBusqueda(), gbe.ContextoBusqueda())
+        self.assertEqual(resultado['puesto_sugerido'], gbe.PUESTO_GENERICO)
+
+    def test_respeta_puesto_objetivo(self):
+        contexto = gbe.ContextoBusqueda(perfil_habilidades='Python, Django')
+        datos = gbe.DatosBusqueda(puesto_objetivo='Ingeniera de Machine Learning')
+        resultado = gbe.generar_busqueda_empleo(datos, contexto)
+        self.assertEqual(resultado['puesto_sugerido'], 'Ingeniera de Machine Learning')
+
+    def test_no_inventa_tecnologias(self):
+        contexto = gbe.ContextoBusqueda(perfil_habilidades='Python, Django')
+        resultado = gbe.generar_busqueda_empleo(gbe.DatosBusqueda(), contexto)
+        self.assertEqual(set(resultado['tecnologias_prioritarias']), {'Python', 'Django'})
+        self.assertNotIn('Kubernetes', resultado['tecnologias_prioritarias'])
+        self.assertNotIn('AWS', resultado['tecnologias_prioritarias'])
+
+    def test_elimina_duplicados_en_la_consulta(self):
+        contexto = gbe.ContextoBusqueda(perfil_habilidades='Python, Django')
+        datos = gbe.DatosBusqueda(puesto_objetivo='Backend Python')
+        resultado = gbe.generar_busqueda_empleo(datos, contexto)
+        palabras = resultado['consulta'].lower().split()
+        self.assertEqual(len(palabras), len(set(palabras)))
+
+    def test_limita_tecnologias_a_las_mas_relevantes(self):
+        contexto = gbe.ContextoBusqueda(
+            perfil_habilidades='Python, Django, React, TypeScript, JavaScript, HTML, CSS, SQL, PostgreSQL, Docker, Git'
+        )
+        resultado = gbe.generar_busqueda_empleo(gbe.DatosBusqueda(), contexto)
+        self.assertLessEqual(len(resultado['tecnologias_prioritarias']), gbe.MAX_TECNOLOGIAS_CONSULTA)
+
+    def test_modalidad_valida_se_normaliza_si_es_desconocida(self):
+        contexto = gbe.ContextoBusqueda()
+        resultado = gbe.generar_busqueda_empleo(gbe.DatosBusqueda(modalidad='marciano'), contexto)
+        self.assertEqual(resultado['modalidad'], 'cualquiera')
+
+    def test_modalidades_admitidas_se_respetan(self):
+        for modalidad in gbe.MODALIDADES_VALIDAS:
+            resultado = gbe.generar_busqueda_empleo(gbe.DatosBusqueda(modalidad=modalidad), gbe.ContextoBusqueda())
+            self.assertEqual(resultado['modalidad'], modalidad)
+
+    def test_consulta_nunca_esta_vacia(self):
+        resultado = gbe.generar_busqueda_empleo(gbe.DatosBusqueda(), gbe.ContextoBusqueda())
+        self.assertTrue(resultado['consulta'].strip())
+
+    def test_codificacion_correcta_de_la_url(self):
+        datos = gbe.DatosBusqueda(puesto_objetivo='Diseñadora UX', ubicacion='A Coruña')
+        resultado = gbe.generar_busqueda_empleo(datos, gbe.ContextoBusqueda())
+
+        self.assertTrue(resultado['linkedin_url'].startswith(gbe.LINKEDIN_JOBS_URL))
+
+        analizada = urlparse(resultado['linkedin_url'])
+        parametros = parse_qs(analizada.query)
+        self.assertEqual(parametros['keywords'][0], resultado['consulta'])
+        self.assertEqual(parametros['location'][0], 'A Coruña')
+
+    def test_url_incluye_codigo_de_modalidad_correcto(self):
+        for modalidad, codigo in gbe.CODIGOS_MODALIDAD.items():
+            resultado = gbe.generar_busqueda_empleo(gbe.DatosBusqueda(modalidad=modalidad), gbe.ContextoBusqueda())
+            parametros = parse_qs(urlparse(resultado['linkedin_url']).query)
+            self.assertEqual(parametros['f_WT'][0], codigo)
+
+    def test_modalidad_cualquiera_no_anade_filtro(self):
+        resultado = gbe.generar_busqueda_empleo(gbe.DatosBusqueda(modalidad='cualquiera'), gbe.ContextoBusqueda())
+        parametros = parse_qs(urlparse(resultado['linkedin_url']).query)
+        self.assertNotIn('f_WT', parametros)
+
+    def test_nivel_junior_detectado_por_practicas(self):
+        contexto = gbe.ContextoBusqueda(perfil_experiencia='Prácticas de 3 meses como desarrolladora.')
+        resultado = gbe.generar_busqueda_empleo(gbe.DatosBusqueda(), contexto)
+        self.assertEqual(resultado['nivel_sugerido'], 'junior')
+
+    def test_nivel_no_se_inventa_con_experiencia_consolidada(self):
+        contexto = gbe.ContextoBusqueda(perfil_experiencia='5 años como desarrollador backend en empresas tecnológicas.')
+        resultado = gbe.generar_busqueda_empleo(gbe.DatosBusqueda(), contexto)
+        self.assertEqual(resultado['nivel_sugerido'], '')
+
+    def test_fallback_sin_ia_devuelve_resultado_de_reglas(self):
+        contexto = gbe.ContextoBusqueda(perfil_habilidades='Python, Django')
+        datos = gbe.DatosBusqueda(ubicacion='Alicante')
+
+        with patch.object(openai_service, 'generar_busqueda_empleo', return_value=None):
+            resultado = gbe.generar_busqueda_empleo_ia(datos, contexto)
+
+        self.assertEqual(resultado, gbe.generar_busqueda_empleo(datos, contexto))
+
+    def test_resultado_con_ia_no_modifica_tecnologias_objetivas(self):
+        contexto = gbe.ContextoBusqueda(perfil_habilidades='Python, Django')
+        datos = gbe.DatosBusqueda(ubicacion='Alicante')
+        base = gbe.generar_busqueda_empleo(datos, contexto)
+
+        resultado_ia = {
+            "puesto_sugerido": "Backend Developer",
+            "consulta": "Backend Developer Python Django",
+        }
+        with patch.object(openai_service, 'generar_busqueda_empleo', return_value=resultado_ia):
+            resultado = gbe.generar_busqueda_empleo_ia(datos, contexto)
+
+        self.assertEqual(resultado['puesto_sugerido'], "Backend Developer")
+        self.assertEqual(resultado['consulta'], "Backend Developer Python Django")
+        # Las tecnologías detectadas por reglas nunca las decide la IA.
+        self.assertEqual(resultado['tecnologias_prioritarias'], base['tecnologias_prioritarias'])
+        self.assertEqual(resultado['ubicacion'], base['ubicacion'])
+        self.assertEqual(resultado['modalidad'], base['modalidad'])
+
+    def test_ia_que_inventa_tecnologia_se_descarta(self):
+        # "React" es una tecnología reconocida por la aplicación
+        # (KEYWORDS_TECNICAS en utils.py), pero no está entre las
+        # detectadas por reglas para este usuario (solo Python y Django):
+        # es exactamente el caso que _tecnologias_respetadas() puede
+        # detectar y debe descartar.
+        contexto = gbe.ContextoBusqueda(perfil_habilidades='Python, Django')
+        datos = gbe.DatosBusqueda(ubicacion='Alicante')
+        base = gbe.generar_busqueda_empleo(datos, contexto)
+
+        resultado_ia = {
+            "puesto_sugerido": "Backend Developer",
+            "consulta": "Backend Developer Python Django React",
+        }
+        with patch.object(openai_service, 'generar_busqueda_empleo', return_value=resultado_ia):
+            resultado = gbe.generar_busqueda_empleo_ia(datos, contexto)
+
+        self.assertEqual(resultado, base)
+
+
+class BusquedaEmpleoAPITests(TestCase):
+    """Tests de integración del endpoint POST /ofertas/generar-busqueda/."""
+
+    def setUp(self):
+        self.user_a = User.objects.create_user(username='juan', password='clave12345')
+        Perfil.objects.create(usuario=self.user_a, rol='usuario')
+        self.token_a = Token.objects.create(user=self.user_a)
+
+        self.user_b = User.objects.create_user(username='maria', password='clave12345')
+        Perfil.objects.create(usuario=self.user_b, rol='usuario')
+        self.token_b = Token.objects.create(user=self.user_b)
+
+    def auth_headers(self, token):
+        return {'HTTP_AUTHORIZATION': f'Token {token.key}'}
+
+    def test_acceso_sin_token_es_rechazado(self):
+        respuesta = self.client.post(
+            '/api/usuarios/ofertas/generar-busqueda/', {}, content_type='application/json'
+        )
+        self.assertEqual(respuesta.status_code, 401)
+
+    def test_entrada_valida(self):
+        respuesta = self.client.post(
+            '/api/usuarios/ofertas/generar-busqueda/',
+            {'ubicacion': 'Alicante', 'modalidad': 'remoto'},
+            content_type='application/json',
+            **self.auth_headers(self.token_a),
+        )
+        self.assertEqual(respuesta.status_code, 200)
+        datos = respuesta.json()
+        for campo in (
+            'puesto_sugerido', 'nivel_sugerido', 'tecnologias_prioritarias',
+            'consulta', 'ubicacion', 'modalidad', 'linkedin_url',
+        ):
+            self.assertIn(campo, datos)
+
+    def test_modalidad_invalida_devuelve_400(self):
+        respuesta = self.client.post(
+            '/api/usuarios/ofertas/generar-busqueda/',
+            {'modalidad': 'marciano'},
+            content_type='application/json',
+            **self.auth_headers(self.token_a),
+        )
+        self.assertEqual(respuesta.status_code, 400)
+        self.assertIn('modalidad', respuesta.json())
+
+    def test_usuario_sin_perfil_ni_cv_no_falla(self):
+        respuesta = self.client.post(
+            '/api/usuarios/ofertas/generar-busqueda/', {}, content_type='application/json',
+            **self.auth_headers(self.token_a),
+        )
+        self.assertEqual(respuesta.status_code, 200)
+        self.assertEqual(respuesta.json()['puesto_sugerido'], gbe.PUESTO_GENERICO)
+
+    def test_usuario_con_perfil_influye_en_el_resultado(self):
+        PerfilProfesional.objects.filter(usuario=self.user_a).delete()
+        PerfilProfesional.objects.create(
+            usuario=self.user_a, habilidades='Python, Django', experiencia='4 años como backend.'
+        )
+
+        respuesta = self.client.post(
+            '/api/usuarios/ofertas/generar-busqueda/', {}, content_type='application/json',
+            **self.auth_headers(self.token_a),
+        )
+        datos = respuesta.json()
+        self.assertEqual(datos['puesto_sugerido'], 'Desarrollador/a Backend')
+        self.assertIn('Python', datos['tecnologias_prioritarias'])
+
+    def test_usuario_con_cv_influye_en_el_resultado(self):
+        Curriculum.objects.create(
+            usuario=self.user_a,
+            nombre_archivo='cv.pdf',
+            texto_extraido='Experiencia con React, TypeScript y JavaScript en proyectos frontend.',
+        )
+
+        respuesta = self.client.post(
+            '/api/usuarios/ofertas/generar-busqueda/', {}, content_type='application/json',
+            **self.auth_headers(self.token_a),
+        )
+        datos = respuesta.json()
+        self.assertIn('React', datos['tecnologias_prioritarias'])
+
+    def test_aislamiento_entre_usuarios(self):
+        PerfilProfesional.objects.filter(usuario=self.user_a).delete()
+        PerfilProfesional.objects.create(usuario=self.user_a, habilidades='Python, Django')
+
+        respuesta_b = self.client.post(
+            '/api/usuarios/ofertas/generar-busqueda/', {}, content_type='application/json',
+            **self.auth_headers(self.token_b),
+        )
+        datos_b = respuesta_b.json()
+        self.assertNotIn('Python', datos_b['tecnologias_prioritarias'])
+        self.assertNotIn('Django', datos_b['tecnologias_prioritarias'])
+
+    def test_no_admite_user_id_manipulable(self):
+        respuesta = self.client.post(
+            '/api/usuarios/ofertas/generar-busqueda/',
+            {'ubicacion': 'Madrid', 'usuario': self.user_b.id, 'user_id': self.user_b.id},
+            content_type='application/json',
+            **self.auth_headers(self.token_a),
+        )
+        self.assertEqual(respuesta.status_code, 200)
+        # No hay ningún dato persistido que pudiera revelar a quién se ha
+        # asignado la búsqueda: el resultado no depende en absoluto de los
+        # campos 'usuario'/'user_id' del payload, que el serializer ignora.
+        self.assertEqual(respuesta.json()['ubicacion'], 'Madrid')
+
+    def test_devuelve_una_url_valida_de_linkedin(self):
+        respuesta = self.client.post(
+            '/api/usuarios/ofertas/generar-busqueda/',
+            {'ubicacion': 'Alicante', 'modalidad': 'remoto'},
+            content_type='application/json',
+            **self.auth_headers(self.token_a),
+        )
+        url = respuesta.json()['linkedin_url']
+        self.assertTrue(url.startswith('https://www.linkedin.com/jobs/search/'))

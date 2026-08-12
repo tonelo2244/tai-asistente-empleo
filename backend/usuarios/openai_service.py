@@ -194,3 +194,24 @@ def evaluar_entrevista(respuestas, contexto, resultado_reglas):
         return None
 
     return {clave: datos[clave] for clave in claves}
+
+
+def generar_busqueda_empleo(datos, contexto, resultado_reglas):
+    """
+    Mejora cualitativa del puesto sugerido y la consulta de búsqueda de
+    LinkedIn Jobs. None si falla, no hay IA, o el formato es inválido.
+    No valida aquí que la IA respete las tecnologías detectadas por
+    reglas: esa comprobación la hace el llamante (generador_busqueda_
+    empleo.py), que es quien conoce la lista real de tecnologías y evita
+    así un import circular con utils.py.
+    """
+    system, user = prompts.prompt_generar_busqueda_empleo(datos, contexto, resultado_reglas)
+    claves = ("puesto_sugerido", "consulta")
+    datos_ia = _completar_json(system, user, set(claves))
+
+    if datos_ia is None or not _validar(datos_ia, campos_texto=claves):
+        if datos_ia is not None:
+            logger.warning("OpenAI: búsqueda de empleo con formato inválido. Se usa el motor de reglas.")
+        return None
+
+    return {clave: datos_ia[clave] for clave in claves}

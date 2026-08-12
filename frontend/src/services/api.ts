@@ -76,6 +76,24 @@ export interface Oferta extends DatosOferta {
   fecha_creacion:                string
 }
 
+export type ModalidadBusqueda = 'cualquiera' | 'presencial' | 'hibrido' | 'remoto'
+
+export interface DatosBusquedaEmpleo {
+  puesto_objetivo: string
+  ubicacion:       string
+  modalidad:       ModalidadBusqueda
+}
+
+export interface ResultadoBusquedaEmpleo {
+  puesto_sugerido:          string
+  nivel_sugerido:           string
+  tecnologias_prioritarias: string[]
+  consulta:                 string
+  ubicacion:                string
+  modalidad:                ModalidadBusqueda
+  linkedin_url:             string
+}
+
 export interface DatosLinkedIn {
   titular_actual: string
   extracto:       string
@@ -296,6 +314,26 @@ export async function obtenerHistorialOfertas(token: string): Promise<Oferta[]> 
     headers: { 'Authorization': `Token ${token}` }
   })
   if (!respuesta.ok) throw new Error('Error al obtener el historial de ofertas')
+  return respuesta.json()
+}
+
+// POST — genera una búsqueda optimizada de LinkedIn Jobs a partir del perfil y el CV del usuario
+export async function generarBusquedaEmpleo(
+  token: string,
+  datos: Partial<DatosBusquedaEmpleo>
+): Promise<ResultadoBusquedaEmpleo> {
+  const respuesta = await fetch(`${BASE_URL}/usuarios/ofertas/generar-busqueda/`, {
+    method:  'POST',
+    headers: {
+      'Content-Type':  'application/json',
+      'Authorization': `Token ${token}`
+    },
+    body: JSON.stringify(datos)
+  })
+  if (!respuesta.ok) {
+    const error = await respuesta.json()
+    throw new Error(extraerPrimerError(error, 'Error al generar la búsqueda de empleo'))
+  }
   return respuesta.json()
 }
 

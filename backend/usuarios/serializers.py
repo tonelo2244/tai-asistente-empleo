@@ -4,6 +4,7 @@ from django.contrib.auth import authenticate
 from django.core.validators import RegexValidator
 from pypdf import PdfReader
 
+from .generador_busqueda_empleo import MODALIDADES_VALIDAS
 from .models import (
     Perfil,
     ROLES,
@@ -284,6 +285,26 @@ class OfertaSerializer(serializers.ModelSerializer):
             "recomendaciones",
             "fecha_creacion",
         ]
+
+
+# -----------------------------
+# Búsqueda de empleo en LinkedIn — Fase 11
+# -----------------------------
+
+class BusquedaEmpleoInputSerializer(serializers.Serializer):
+    puesto_objetivo = serializers.CharField(max_length=100, required=False, allow_blank=True)
+    ubicacion = serializers.CharField(max_length=100, required=False, allow_blank=True)
+    modalidad = serializers.ChoiceField(
+        choices=MODALIDADES_VALIDAS, required=False, default='cualquiera'
+    )
+
+    def validate(self, data):
+        # Sanitización básica: quitar espacios sobrantes, igual que en el resto de formularios.
+        for campo in ('puesto_objetivo', 'ubicacion'):
+            if campo in data and isinstance(data[campo], str):
+                data[campo] = data[campo].strip()
+
+        return data
 
 
 # -----------------------------

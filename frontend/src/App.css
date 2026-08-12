@@ -489,6 +489,7 @@
 }
 
 .form-field input,
+.form-field select,
 .form-field textarea {
   width: 100%;
   padding: 10px 12px;

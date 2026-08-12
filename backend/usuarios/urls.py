@@ -30,6 +30,9 @@ urlpatterns = [
     path('ofertas/crear/',       views.crear_oferta),
     path('ofertas/historial/',   views.historial_ofertas),
 
+    # Fase 11 — búsqueda optimizada de ofertas en LinkedIn
+    path('ofertas/generar-busqueda/', views.generar_busqueda_empleo),
+
     # Fase 8 — optimización de LinkedIn
     path('linkedin/crear/',      views.crear_optimizacion_linkedin),
     path('linkedin/historial/',  views.historial_linkedin),

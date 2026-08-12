@@ -287,3 +287,52 @@ def prompt_evaluar_entrevista(respuestas, contexto, resultado_reglas):
         INSTRUCCION_JSON.format(claves=claves),
     ])
     return system, user
+
+
+# -----------------------------
+# Búsqueda de empleo en LinkedIn
+# -----------------------------
+
+def prompt_generar_busqueda_empleo(datos, contexto, resultado_reglas):
+    """
+    datos: DatosBusqueda (puesto_objetivo, ubicacion, modalidad).
+    contexto: ContextoBusqueda (perfil + CV).
+    resultado_reglas: dict ya calculado por generador_busqueda_empleo
+    .generar_busqueda_empleo(), incluye las tecnologias_prioritarias ya
+    detectadas por reglas (única fuente de tecnologías admitida).
+    """
+    system = (
+        "Eres un asesor de empleo que ayuda a redactar una búsqueda de "
+        "ofertas en LinkedIn Jobs dentro de la aplicación TAI. "
+        f"{INSTRUCCION_NO_INVENTAR} No debes mencionar ninguna tecnología "
+        "que no aparezca en la lista de tecnologías prioritarias indicada "
+        "a continuación: cualquier tecnología adicional será descartada."
+    )
+
+    claves = "puesto_sugerido, consulta"
+    user = "\n".join([
+        _lista_o_vacio(datos.puesto_objetivo, "Puesto objetivo indicado por el usuario"),
+        _lista_o_vacio(contexto.perfil_experiencia, "Experiencia (Perfil TAI)"),
+        _lista_o_vacio(contexto.perfil_estudios, "Estudios (Perfil TAI)"),
+        _lista_o_vacio(contexto.perfil_habilidades, "Habilidades (Perfil TAI)"),
+        _lista_o_vacio(contexto.texto_cv, "CV analizado"),
+        "",
+        f"Puesto sugerido ya calculado por reglas (no lo contradigas si no "
+        f"tienes datos mejores): {resultado_reglas.get('puesto_sugerido', '')}.",
+        f"Tecnologías prioritarias ya detectadas (únicas tecnologías que "
+        f"puedes usar): "
+        f"{', '.join(resultado_reglas.get('tecnologias_prioritarias', [])) or '(ninguna)'}.",
+        f"Nivel sugerido ya calculado (no lo contradigas): "
+        f"{resultado_reglas.get('nivel_sugerido', '') or '(sin especificar)'}.",
+        "",
+        "Genera:",
+        "- puesto_sugerido: un nombre de puesto breve y natural (una sola "
+        "línea), priorizando siempre el puesto objetivo del usuario si lo "
+        "ha indicado.",
+        "- consulta: una consulta de búsqueda breve para LinkedIn Jobs, "
+        "combinando el puesto sugerido con las tecnologías prioritarias "
+        "indicadas arriba (nunca otras) y, si procede, el nivel sugerido.",
+        "",
+        INSTRUCCION_JSON.format(claves=claves),
+    ])
+    return system, user

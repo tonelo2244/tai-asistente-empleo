@@ -25,6 +25,7 @@ from .serializers import (
     CurriculumSerializer,
     OfertaCreateSerializer,
     OfertaSerializer,
+    BusquedaEmpleoInputSerializer,
     OptimizacionLinkedInCreateSerializer,
     OptimizacionLinkedInSerializer,
     FinalizarEntrevistaSerializer,
@@ -33,6 +34,11 @@ from .serializers import (
 
 from .utils import analizar_perfil, analizar_perfil_ia, extraer_texto_pdf, analizar_cv_ia
 from .comparador import DatosOferta, DatosCandidato, comparar_oferta_ia
+from .generador_busqueda_empleo import (
+    DatosBusqueda,
+    ContextoBusqueda,
+    generar_busqueda_empleo_ia,
+)
 from .optimizador_linkedin import DatosLinkedIn, DatosContexto, optimizar_linkedin_ia
 from .evaluador_entrevista import (
     ContextoEntrevista,
@@ -270,6 +276,38 @@ def historial_ofertas(request):
     ofertas = Oferta.objects.filter(usuario=request.user)
     serializer = OfertaSerializer(ofertas, many=True)
     return Response(serializer.data)
+
+
+@api_view(['POST'])
+@permission_classes([IsAuthenticated])
+def generar_busqueda_empleo(request):
+    serializer = BusquedaEmpleoInputSerializer(data=request.data)
+
+    if not serializer.is_valid():
+        return Response(serializer.errors, status=400)
+
+    datos_validados = serializer.validated_data
+
+    # El perfil y el CV son siempre los del usuario autenticado; el
+    # payload del cliente nunca puede indicar ni sobrescribir el usuario.
+    perfil, _ = PerfilProfesional.objects.get_or_create(usuario=request.user)
+    cv = Curriculum.objects.filter(usuario=request.user).first()
+
+    datos_busqueda = DatosBusqueda(
+        puesto_objetivo=datos_validados.get('puesto_objetivo', ''),
+        ubicacion=datos_validados.get('ubicacion', ''),
+        modalidad=datos_validados.get('modalidad', 'cualquiera'),
+    )
+    contexto = ContextoBusqueda(
+        perfil_experiencia=perfil.experiencia,
+        perfil_estudios=perfil.estudios,
+        perfil_habilidades=perfil.habilidades,
+        texto_cv=cv.texto_extraido if cv else '',
+    )
+
+    resultado = generar_busqueda_empleo_ia(datos_busqueda, contexto)
+
+    return Response(resultado)
 
 
 @api_view(['POST'])
