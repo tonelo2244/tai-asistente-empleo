@@ -1,6 +1,6 @@
 # TAI — Asistente de Búsqueda de Empleo
 
-Trabajo de Fin de Grado (TFG). Aplicación web que ayuda a un candidato a preparar su búsqueda de empleo: perfil profesional, análisis de CV, comparación con ofertas, optimización de LinkedIn y simulación de entrevistas, con feedback generado por reglas propias y, opcionalmente, por IA (OpenAI).
+Trabajo de Fin de Máster (TFM). Aplicación web que ayuda a un candidato a preparar su búsqueda de empleo: perfil profesional, análisis de CV, comparación con ofertas, optimización de LinkedIn y simulación de entrevistas, con feedback generado por reglas propias y, opcionalmente, por IA (OpenAI).
 
 ## Descripción
 
@@ -173,4 +173,4 @@ tai/
 
 ## Autor
 
-_(nombre del autor/a del TFG)_
+Antonio González — [GitHub](https://github.com/tonelo2244) · [LinkedIn](https://www.linkedin.com/in/antonio-gonzalez-seisdedos)
